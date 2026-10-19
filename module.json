@@ -2,14 +2,37 @@
   "id": "averis-bound-system",
   "title": "Averis Bound System — Linked Fate",
   "description": "60 cooperative D&D 5e Bound techniques, shared hero XP and partner Bond Rank progression, GM-approved encounters, responsive UI and safe one-time rolls.",
-  "version": "0.2.2",
-  "authors": [{"name": "Averis Campaign"}],
-  "compatibility": {"minimum": "14", "maximum": "14", "verified": "14"},
-  "relationships": {"systems": [{"id": "dnd5e", "type": "system", "compatibility": {"minimum": "5.3.3", "maximum": "5.3.3"}}]},
+  "version": "0.2.3",
+  "authors": [
+    {
+      "name": "Averis Campaign"
+    }
+  ],
+  "compatibility": {
+    "minimum": "14",
+    "maximum": "14",
+    "verified": "14"
+  },
+  "relationships": {
+    "systems": [
+      {
+        "id": "dnd5e",
+        "type": "system",
+        "compatibility": {
+          "minimum": "5.3.3",
+          "maximum": "5.3.3"
+        }
+      }
+    ]
+  },
   "socket": true,
-  "esmodules": ["scripts/main.js"],
-  "styles": ["styles/bound.css"],
+  "esmodules": [
+    "scripts/main.js"
+  ],
+  "styles": [
+    "styles/bound.css"
+  ],
   "url": "https://github.com/Daikaze/Averis-Skill-Tree./tree/averis-bound-system",
   "manifest": "https://raw.githubusercontent.com/Daikaze/Averis-Skill-Tree./averis-bound-system/module.json",
-  "download": "https://github.com/Daikaze/Averis-Skill-Tree./releases/download/bound-v0.2.2/averis-bound-system-v0.2.2.zip"
+  "download": "https://github.com/Daikaze/Averis-Skill-Tree./releases/download/bound-v0.2.3/averis-bound-system-v0.2.3.zip"
 }
