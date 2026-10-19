@@ -2,6 +2,16 @@
 
 A custom Foundry VTT **V14** module for the Averis D&D campaign. This is an initial *playtest build*; it has been statically checked but not run inside your Foundry instance.
 
+## Install via Manifest URL (recommended)
+
+In Foundry VTT **Setup → Add-on Modules → Install Module**, paste this into **Manifest URL** and click **Install**:
+
+```text
+https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json
+```
+
+Once installed, launch the D&D 5e world and enable **Averis Skill Tree — D&D 5e** via **Game Settings → Manage Modules**. Future published releases can be picked up by **Check Update**. The repository name intentionally ends with a dot; preserve it in the URL.
+
 ## Install locally
 
 1. Shut down the Foundry server, or at least close the world.
