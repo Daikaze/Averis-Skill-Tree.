@@ -1,4 +1,4 @@
-# Averis Bound System v0.2.1 — инструкция
+# Averis Bound System v0.2.2 — инструкция
 
 ## Важни неща
 
@@ -35,3 +35,7 @@
 ## Ограничения
 
 Препоръчват се **Linked Character Tokens** за постоянна прогресия през сцени. При Unlinked Synthetic Actors прогресът може да остане само в съответния токен. Модулът е проверен със скриптове и UI симулация, но още не е тестван в твоята реална Foundry инсталация.
+
+## v0.2.2 interface changes
+
+All in-module UI labels are in English. Fixed overlapping technique cards, navigation tabs and hard-to-read native dropdown options.
