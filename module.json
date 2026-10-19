@@ -2,7 +2,7 @@
   "id": "averis-skill-tree",
   "title": "Averis Skill Tree — D&D 5e",
   "description": "Custom RPG skill progression for Averis, including universal, class and affinity trees linked to real D&D 5e Items, skills and Active Effects.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "authors": [
     {
       "name": "Averis Campaign"
@@ -31,5 +31,5 @@
   ],
   "url": "https://github.com/Daikaze/Averis-Skill-Tree.",
   "manifest": "https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json",
-  "download": "https://github.com/Daikaze/Averis-Skill-Tree./releases/download/v0.1.0/averis-skill-tree-v0.1.0.zip"
+  "download": "https://github.com/Daikaze/Averis-Skill-Tree./releases/download/v0.2.0/averis-skill-tree-v0.2.0.zip"
 }
