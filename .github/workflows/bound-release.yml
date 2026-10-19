@@ -23,6 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check scripts/main.js
+          node --check scripts/geometry.mjs
           node --check scripts/rules.mjs
           node --check scripts/catalog.mjs
           node --check scripts/progression.mjs
