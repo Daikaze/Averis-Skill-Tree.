@@ -1,0 +1,2 @@
+Verified source package for Averis Skill Tree v0.1.0
+Source archive SHA256: 9ce8e3fa2ac1eb9b0549cb40ecfefc1ecd9e019af9fd5b9b24c7c5d432fa3701
