@@ -1,0 +1,58 @@
+name: Test and publish Averis Affinity Manager
+on:
+  push:
+    branches: [averis-affinity-manager]
+    paths:
+      - 'scripts/**'
+      - 'styles/**'
+      - 'tests/**'
+      - 'module.json'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks and regression tests
+        run: |
+          set -euo pipefail
+          node --check scripts/main.js
+          node --check scripts/catalog.mjs
+          node --check scripts/engine.mjs
+          node --check scripts/redact.mjs
+          node --test tests/*.test.mjs
+      - name: Validate manifest and package
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          m=json.load(open('module.json'))
+          assert m['id']=='averis-affinity-manager'
+          assert m['compatibility']['minimum']=='14'
+          assert m['relationships']['systems'][0]['compatibility']['minimum']=='5.3.3'
+          v=m['version']
+          assert m['manifest']=='https://raw.githubusercontent.com/Daikaze/Averis-Skill-Tree./averis-affinity-manager/module.json'
+          assert m['download']==f'https://github.com/Daikaze/Averis-Skill-Tree./releases/download/affinity-v{v}/averis-affinity-manager-v{v}.zip'
+          PY
+          VERSION=$(python3 -c 'import json;print(json.load(open("module.json"))["version"])')
+          echo "AAM_VERSION=$VERSION" >> "$GITHUB_ENV"
+          zip -q -r "averis-affinity-manager-v${VERSION}.zip" module.json scripts styles README.md START_HERE_BG.md
+          unzip -t "averis-affinity-manager-v${VERSION}.zip"
+      - name: Publish versioned release (preserve Skill Tree latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="affinity-v${AAM_VERSION}"
+          ZIP="averis-affinity-manager-v${AAM_VERSION}.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release already exists: $TAG" >&2
+            exit 1
+          fi
+          gh release create "$TAG" "$ZIP" --title "Averis Affinity Manager v${AAM_VERSION}" --notes "Playtest for Foundry 14 / D&D 5e 5.3.3. GM-only UI DC, 65 canonical abilities, teacher mastery, usage tracking, and safe progression." --latest=false
