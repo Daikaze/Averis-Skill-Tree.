@@ -20,3 +20,17 @@
 .averis-open-tree{display:inline-flex;align-items:center;justify-content:center;gap:6px;align-self:flex-start;background:#4a3b6e;color:#f2eaff;border:1px solid #9d82e4;border-radius:5px;padding:6px 11px;margin:4px 6px;cursor:pointer;z-index:20;box-shadow:none;font-size:12px;font-weight:700;}.averis-open-tree:hover{background:#695491;}
 .averis-dialog{display:flex;flex-direction:column;gap:10px;max-height:65vh;overflow:auto;min-width:min(380px,75vw);padding:5px 4px;}.averis-field{display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:650;}.averis-field input,.averis-field select,.averis-field textarea{width:100%;padding:7px;min-height:30px;border-radius:5px;}.averis-dialog .hint{font-size:11px;line-height:1.4;opacity:.7;margin:4px 0;}.averis-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px;}.averis-check-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}.averis-check-grid label{font-size:12px;display:flex;align-items:center;gap:7px;}
 @media(max-width:760px){.averis-workspace{grid-template-columns:163px minmax(0,1fr);}.averis-node-grid{grid-template-columns:1fr;}.averis-sidebar{padding:12px 6px;}.averis-banner{padding:13px;}.averis-character img{width:48px;height:48px;}.averis-identity h1{font-size:17px;}}
+/* v0.2.0: stronger toolbar containment & deletion button hitboxes; no overlap with title. */
+.averis-tree-title{align-items:center;flex-wrap:wrap;min-height:74px;overflow:visible;}
+.averis-heading{min-width:0;flex:1 1 210px;overflow-wrap:anywhere;}
+.averis-toolbar{position:relative;flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-height:42px;z-index:2;}
+.averis-toolbar .averis-icon-button{width:36px;height:36px;min-width:36px;min-height:36px;display:inline-flex;align-items:center;justify-content:center;padding:0;}
+.averis-icon-button.averis-danger{border-color:#805260;color:#ffa0b0;}
+.averis-icon-button.averis-danger:hover{background:#6c3544;border-color:#ff879d;}
+.averis-node-actions .averis-icon-button{flex:0 0 31px;min-height:34px;display:inline-flex;align-items:center;justify-content:center;}
+.averis-layout,.averis-workspace,.averis-main{min-width:0;}
+.averis-xp-strip{flex-wrap:wrap;white-space:normal;gap:8px;}
+.averis-check-grid label{min-height:27px;cursor:pointer;}
+.averis-check-grid label input{appearance:auto;flex:0 0 auto;width:17px;height:17px;margin:0;accent-color:#a78bfa;}
+.averis-node-description{min-height:55px;}
+@media(max-width:650px){.averis-workspace{grid-template-columns:145px minmax(0,1fr)}.averis-tree-title{padding:12px}.averis-node-scroll{padding:10px}.averis-toolbar{width:100%;justify-content:flex-start}.averis-button{min-height:34px}}
