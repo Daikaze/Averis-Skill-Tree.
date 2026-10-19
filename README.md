@@ -1,94 +1,62 @@
-# Averis Skill Tree — D&D 5e (v0.1.0)
+# Averis Skill Tree — Foundry V14 / D&D 5e 5.3.3 (v0.2.0)
 
-A custom Foundry VTT **V14** module for the Averis D&D campaign. This is an initial *playtest build*; it has been statically checked but not run inside your Foundry instance.
+Custom campaign skill progression: a character gains **one independent Skill Point on each Skill Level** and spends it on abilities from General, Class, and assigned Affinity trees. These are additional **Averis homebrew** progression perks, not a replacement for normal D&D 5e advancement. No GM creation of every ability or Item UUID is required.
 
-## Install via Manifest URL (recommended)
+## Install or update via Manifest URL
 
-In Foundry VTT **Setup → Add-on Modules → Install Module**, paste this into **Manifest URL** and click **Install**:
+In **Foundry Setup → Add-on Modules → Install Module**, paste:
 
-```text
+```
 https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json
 ```
 
-Once installed, launch the D&D 5e world and enable **Averis Skill Tree — D&D 5e** via **Game Settings → Manage Modules**. Future published releases can be picked up by **Check Update**. The repository name intentionally ends with a dot; preserve it in the URL.
+The trailing `.` in the repository name is intentional. Users upgrading from v0.1.0 can choose **Check Update**, then activate the new version. Back up the Foundry **world** before updating: the module migrates world-wide tree definitions when a GM logs in.
 
-## Install locally
+## What's new in v0.2.0
 
-1. Shut down the Foundry server, or at least close the world.
-2. Extract the included `averis-skill-tree` folder into `FoundryVTT/Data/modules/` in your **Foundry User Data** directory. The path must end with `Data/modules/averis-skill-tree/module.json`.
-3. Start Foundry V14, open your D&D 5e world, select **Game Settings → Manage Modules**, enable **Averis Skill Tree — D&D 5e** and save.
-4. Open any D&D 5e **Character** sheet and select **Skill Tree**. The module also exposes `game.modules.get("averis-skill-tree").api.openSelected()` as a macro-friendly function.
+- Fixed `DialogV2.input` plain-object input parsing (XP, bonus points, editing, Affinity assignment).
+- Fixed Affinity checkboxes, which now have unique form names, including `No Mana` (no Affinity selected).
+- Fixed narrow toolbar/delete buttons and protected preconfigured system trees from accidental deletion.
+- **31 built-in trees**, **159 nodes**: four General trees (all 18 dnd5e skills, adventure combat talents), unique 5-ability trees for 13 D&D 5e classes, and all 14 Averis Affinities with five tiers each.
+- Abilities no longer need GM-linked World/Compendium Items: the module creates native D&D 5e Features and Spells directly on the Actor; skill proficiency/expertise and passive bonuses use Active Effects. Class attacks with stated numeric damage have native Attack Activities. Missing exact Affinity attack/DC data is **not invented**: the Item is a clickable Utility Activity with the canonical description and GM adjudication.
+- XP grants **+1 Skill Point per Skill Level** (starts with 1 point at Level 1), independent from class levels. Formula: `100 × current Skill Level` XP for next Skill Level. Negative XP changes current unspent XP only; already spent points never become invalid.
+- Better safety: no missing linked Item can consume points, per-window purchase lock, rollback of newly created Items/Effects if saving Actor progress fails, prohibit removing an Affinity with invested skills, and protect a character's unrelated Items/Effects during Reset.
+- Migrates v0.1.0 world settings once. Keeps custom trees/custom nodes and invested legacy trees when required rather than discarding saved purchases.
 
-**Before trying on your main campaign:** Back up your Foundry world. Some node unlocks create and delete Actor Items and Active Effects.
+## How players use it
 
-## Design
+1. Open a Character Sheet and click **Skill Tree**. Every character sees General trees and the tree for each class Item actually present on their sheet.
+2. The GM clicks **Assign Affinities** to select Fire, Water, Earth, Wind, Lightning, Ice, Thunder, Acid, Poison, Necrotic, Psychic, Radiant, Force, or Blood.
+3. The GM clicks **+ XP** to award independent Skill XP. On each Skill Level increase the hero automatically gains one spendable point.
+4. Click **UNLOCK / UPGRADE** on an available node. The Actor gets the native skill/effect/item and the Skill Point is deducted once.
+5. For unlocked spells and class ability Items, open the sheet's native Spells/Features area. Click the small book icon in the tree to open the Item itself. Normal D&D 5e features and advancements remain unchanged.
 
-- One *Averis Skill Level* per character, with independent Skill XP and Skill Points. Starts at Skill Level 1 with 1 point; each later level adds 1 point. Needed XP for next level = current Skill Level × 100.
-- **General** trees are available to all PCs.
-- **Class** trees are shown when the character actually has a class Item (e.g. Paladin).
-- **Affinity** trees are opt-in and only appear after GM uses **Assign Affinities**.
-- All trees/nodes are defined in a world-level setting, editable in the interface by the GM. Character progress is saved using actor flags.
-- D&D actions, weapons, spells, and features are granted by copying a **real existing Foundry dnd5e Item** from a World Item or Compendium into the Actor. Its normal D&D 5e Activities control attacks, spell slots, damage, saves, action economy, concentration, and uses.
-- Skill proficiency/expertise or passive modifiers are applied through native dnd5e Active Effects. Supported effect keys are restricted to validated dnd5e paths.
-- A missing Item UUID blocks spending points rather than awarding a non-functional ability.
-- D&D's core level/proficiency progression, class advancements, spellcasting rules, and combat calculations are not replaced.
+## Exact mechanics and limitations
 
-## GM: adding a D&D skill, attack, or spell
+- Built-in **General skills** provide standard proficiency and expertise via Active Effects (Rank 1 / 2); passive bonuses use dnd5e Active Effect paths.
+- Unique **Class talents** are explicitly labelled extra Averis homebrew abilities, not copied SRD class advancement features (avoids duplication with Rage, Extra Attack, Lay on Hands, etc). Their descriptions specify action economy/usage and often saves or damage where provided.
+- **Affinity names** were restored from previously discussed Averis canon. Fire, Water, Earth, Wind, Lightning, Ice, Acid, Poison, Necrotic, Psychic, Radiant, Force, Blood have their named tier skills. Canonical Thunder tier 2–5 descriptions were not previously recorded and are labelled **Unspecified**, rather than inventing them. Some Affinity damage/DC/uses are likewise unspecified: the automatic native Item serves as a tracked D&D feature, while the GM handles effects manually until those values are configured.
+- D&D `system.activities` support depends on the installed dnd5e build. If a build rejects generated Activities, the module retries with a plain native Item and warns the GM. This fails safe (keeps a usable Feature/Spell description but no automated attack). Do not expect all non-numeric Affinity attacks, buffs, temporary areas, conditions, or summoning to run automatically without custom Activities/Midi-QOL configuration.
+- A `1/Long Rest` Item **may still require configuration/checking** of consumption and recovery in a specific installed dnd5e system version. Confirm once on a test character.
+- No simultaneous multi-client transaction arbitration. Only one owner should spend points for a character at a time.
+- This release is **code-reviewed and tested with a Node-based mocked Foundry harness**, not yet runtime-tested inside your actual Foundry V14/5.3.3 installation. Back up first and confirm the live UI as a GM and a player.
 
-1. Open a character's Skill Tree; press **+** in the tree header to add a node, or the pencil icon to edit an existing node.
-2. For an existing **spell**: in Items or a Compendium, create/select the Spell with the exact correct spell level, school, components, casting time (Action/Bonus Action/Reaction), spell slots, range, target, saving throw, damage dice, Concentration, and limits. Right-click / obtain its document UUID, paste it into the Skill Tree node. Set `D&D category: Spell` and `Grant method: Link an existing D&D 5e Item`.
-3. For **melee / ranged / spell attacks**: use a native Weapon, Spell or Feat Item with an Attack Activity and Damage Activity. Configure the relevant proficiency, range, damage and uses there, then link the Item UUID as above.
-4. For **class features / affinity features**: use a native Feature (Feat) Item, optionally with its own Activities and Active Effects. Link the UUID.
-5. For **Skill Checks**: select `Grant method: Proficiency / Expertise` and the exact D&D skill (e.g. Stealth). Set `Max Ranks: 2`: Rank 1 grants proficiency; Rank 2 grants expertise (using the system upgrade mode).
-6. For **passives**: choose `D&D 5e Active Effect` and a supported target (AC, initiative, attack, damage, save bonus, etc.). `Bonus per rank` is applied for each unlocked rank.
-7. Set `Tier`, `Minimum Skill Level`, `Cost per rank`, and prerequisite **node IDs**. GM sees IDs at the bottom of each node.
+## GM customization
 
-Important: The supplied class and affinity trees intentionally contain **template slots**, not new invented class or Affinity mechanics. The GM must link real D&D5e Items before players can buy them. This prevents duplicate class features and preserves all existing Averis Affinity definitions.
+The module includes a GM-only tree/node editor for optional personal rules. To add custom attacks/spells with precise dice and DC, you can link a complete native D&D Item UUID as before. The 159 preloaded nodes do not need you to do that.
 
-## GM tools
+## Developer testing
 
-- **+ XP:** Award/remove Skill XP. Raising an Averis Skill Level automatically adds a point.
-- **+ Points:** Give optional extra points.
-- **Assign Affinities:** Allow only selected elemental trees for the Actor.
-- **New Tree:** Add your own Common, Class, Affinity or Character-specific tree.
-- **Add/Edit/Delete Nodes:** Set properties and prerequisites. Nodes already invested in by a world character cannot be edited or removed until the GM resets affected character progression.
-- **Reset Character:** Deletes *only* Items and Active Effects that have this module's `nodeId` flag and resets this Actor's skill progression. Other Items/Effects are untouched.
-
-## Version scope & limitations
-
-- Foundry **V14**, D&D 5e **5.3.3+** intended. Not yet live-tested with your exact sheet, installed modules or Foundry build.
-- The module supports **PC Actors (character)**; NPCs are excluded in this initial version.
-- All effects granted via this module are permanent Actor Active Effects. Do not represent a 1-minute spell or temporary buff as a permanent passive; instead link an actual D&D5e Item with its own temporary effect and duration.
-- Editing a *source* Item later does **not** retroactively update the already-granted Actor copy.
-- Deleting an existing tree/nodes with stored Actor investments from token-only Actors (not in the World Actors directory) is not completely guarded. Prefer backups and world Actors.
-- If a class has already granted a feature through standard D&D class advancement, don't grant that identical Item again via Skill Tree.
-- All initial attack/spell/affinity slots need GM-linked Items; they do not cast automatically from the tree itself.
-- No cross-client transaction lock: avoid two owners purchasing from the exact same Actor simultaneously.
-
-## Example macro
-
-```js
-await game.modules.get("averis-skill-tree").api.openSelected();
+```bash
+node --check scripts/main.js
+node --check scripts/data.js
+node tests/smoke.mjs
 ```
 
-## File structure
+## Source and updates
 
-```
-averis-skill-tree/
-  module.json
-  scripts/
-    main.js
-    data.js
-  styles/
-    tree.css
-  templates/
-    main.hbs
-  README.md
-```
+GitHub: https://github.com/Daikaze/Averis-Skill-Tree.
 
-## References
+Manifest: https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json
 
-- Foundry V14 [ApplicationV2 and HandlebarsApplicationMixin](https://foundryvtt.com/api/modules/foundry.applications.html)
-- Foundry [Introduction to Module Development](https://foundryvtt.com/article/module-development/)
-- Foundry dnd5e [Active Effect Guide](https://github.com/foundryvtt/dnd5e/wiki/Active-Effect-Guide)
-- Foundry dnd5e [Activities](https://github.com/foundryvtt/dnd5e/wiki/Activities)
+Release assets are produced by GitHub Actions. Update checking in Foundry will follow new published releases.
