@@ -1,0 +1,106 @@
+<section class="averis-layout">
+  <header class="averis-banner">
+    <div class="averis-character">
+      <img src="{{actorImage}}" alt="" />
+      <div class="averis-identity">
+        <span class="averis-eyebrow">AVERIS · D&D 5E PROGRESSION</span>
+        <h1>{{actor.name}}</h1>
+        <span class="averis-subhead">Skill Level {{progress.level}} <span class="averis-dot">✦</span> Independent from Character Level</span>
+      </div>
+    </div>
+    <div class="averis-top-stats">
+      <div class="averis-stat"><span>SKILL LEVEL</span><strong>{{progress.level}}</strong></div>
+      <div class="averis-stat averis-points"><span>AVAILABLE POINTS</span><strong>{{free}}</strong></div>
+    </div>
+  </header>
+  <div class="averis-xp-strip">
+    <span>SKILL XP</span>
+    <div class="averis-xp-track"><div class="averis-xp-fill" style="width: {{xpPct}}%"></div></div>
+    <span>{{progress.xp}} / {{needed}}</span>
+    {{#if isGM}}
+      <button type="button" class="averis-button averis-small" data-action="grantXp"><i class="fa-solid fa-plus"></i> XP</button>
+      <button type="button" class="averis-button averis-small" data-action="grantPoints"><i class="fa-solid fa-gem"></i> Points</button>
+    {{/if}}
+  </div>
+  <div class="averis-workspace">
+    <aside class="averis-sidebar">
+      <div class="averis-section-head"><span>YOUR TREES</span><i class="fa-solid fa-seedling"></i></div>
+      <div class="averis-tree-list">
+        {{#each trees}}
+          <button type="button" class="averis-tree-tab {{#if selected}}is-selected{{/if}}" data-action="selectTree" data-tree="{{id}}">
+            <i class="{{icon}}"></i>
+            <span>{{name}}<small>{{#if isCommon}}GENERAL{{else}}{{#if isClass}}CLASS{{else}}{{#if isAffinity}}AFFINITY{{else}}PERSONAL{{/if}}{{/if}}{{/if}}</small></span>
+            {{#if selected}}<i class="fa-solid fa-chevron-right"></i>{{/if}}
+          </button>
+        {{/each}}
+      </div>
+      {{#if isGM}}
+        <div class="averis-sidebar-tools">
+          <div class="averis-section-head">GM TOOLS</div>
+          <button type="button" class="averis-button" data-action="affinities"><i class="fa-solid fa-wand-sparkles"></i> Assign Affinities</button>
+          <button type="button" class="averis-button" data-action="addTree"><i class="fa-solid fa-plus"></i> New Tree</button>
+          <button type="button" class="averis-button averis-muted" data-action="reset"><i class="fa-solid fa-rotate-left"></i> Reset Character</button>
+        </div>
+      {{/if}}
+      <div class="averis-footer-tip"><i class="fa-solid fa-circle-info"></i> 1 Skill Point is earned at every Skill Level, starting at Level 1. GM may award extras.</div>
+    </aside>
+    <main class="averis-main">
+      {{#if tree}}
+        <div class="averis-tree-title">
+          <div class="averis-heading"><span class="averis-eyebrow">{{tree.scope}} TREE</span><h2><i class="{{tree.icon}}"></i> {{tree.name}}</h2></div>
+          {{#if isGM}}
+            <div class="averis-toolbar">
+              <button type="button" class="averis-icon-button" data-action="editTree" title="Edit tree"><i class="fa-solid fa-pen"></i></button>
+              <button type="button" class="averis-icon-button" data-action="addNode" title="Add D&D ability"><i class="fa-solid fa-plus"></i></button>
+              <button type="button" class="averis-icon-button averis-danger" data-action="deleteTree" title="Delete tree"><i class="fa-solid fa-trash"></i></button>
+            </div>
+          {{/if}}
+        </div>
+        <div class="averis-node-scroll">
+          {{#each groups}}
+            <div class="averis-tier">
+              <div class="averis-tier-heading"><div class="averis-rule"></div><span>TIER {{tier}}</span><div class="averis-rule"></div></div>
+              <div class="averis-node-grid">
+                {{#each nodes}}
+                  <article class="averis-node {{#if unlocked}}is-unlocked{{/if}} {{#if maxed}}is-maxed{{/if}} {{#if lockReason}}is-locked{{/if}}">
+                    <div class="averis-node-head">
+                      <div class="averis-node-symbol">
+                        {{#if isSpell}}<i class="fa-solid fa-wand-sparkles"></i>
+                        {{else}}{{#if isAttack}}<i class="fa-solid fa-burst"></i>
+                        {{else}}{{#if isSkill}}<i class="fa-solid fa-dice-d20"></i>
+                        {{else}}{{#if isPassive}}<i class="fa-solid fa-shield-halved"></i>
+                        {{else}}<i class="fa-solid fa-star"></i>{{/if}}{{/if}}{{/if}}{{/if}}
+                      </div>
+                      <div class="averis-node-name"><h3>{{name}}</h3><span>{{kind}} · {{grantLabel}}</span></div>
+                      {{#if unlocked}}<i class="fa-solid fa-circle-check averis-check"></i>{{else}}<i class="fa-solid fa-lock averis-lock"></i>{{/if}}
+                    </div>
+                    <p class="averis-node-description">{{description}}</p>
+                    <div class="averis-rank-line"><span>RANK {{rank}} / {{maxRank}}</span><span>LEVEL {{minLevel}}+</span></div>
+                    <div class="averis-rank-track" title="Rank {{rank}} out of {{maxRank}}"><div class="averis-rank-fill" style="width: {{rankPct}}%"></div></div>
+                    {{#if lockReason}}{{#unless maxed}}<div class="averis-reason"><i class="fa-solid fa-lock"></i> {{lockReason}}</div>{{/unless}}{{/if}}
+                    <div class="averis-node-actions">
+                      <button type="button" class="averis-buy" data-action="invest" data-node="{{id}}" {{#unless canInvest}}disabled{{/unless}}>
+                        {{#if maxed}}MAX RANK{{else}}{{#if unlocked}}UPGRADE · {{cost}} POINT{{else}}UNLOCK · {{cost}} POINT{{/if}}{{/if}}
+                      </button>
+                      {{#if showOpen}}<button type="button" class="averis-icon-button" data-action="openItem" data-node="{{id}}" title="Open granted Item"><i class="fa-solid fa-book-open"></i></button>{{/if}}
+                      {{#if @root.isGM}}
+                        <button type="button" class="averis-icon-button" data-action="editNode" data-node="{{id}}" title="Edit node"><i class="fa-solid fa-pen"></i></button>
+                        <button type="button" class="averis-icon-button averis-danger" data-action="deleteNode" data-node="{{id}}" title="Delete node"><i class="fa-solid fa-trash"></i></button>
+                      {{/if}}
+                    </div>
+                    {{#if @root.isGM}}<div class="averis-node-id">ID: {{id}}</div>{{/if}}
+                  </article>
+                {{/each}}
+              </div>
+              <div class="averis-tier-connector"><i class="fa-solid fa-chevron-down"></i></div>
+            </div>
+          {{else}}
+            <div class="averis-empty"><i class="fa-solid fa-code-branch"></i><h3>No skills yet</h3><p>GM can use + to add D&D skills, feats, attacks and spells to this tree.</p></div>
+          {{/each}}
+        </div>
+      {{else}}
+        <div class="averis-empty"><i class="fa-solid fa-tree"></i><h3>No trees assigned</h3><p>GM can create a General tree or assign an Affinity. Class trees appear when a D&D 5e class Item is present on the character.</p></div>
+      {{/if}}
+    </main>
+  </div>
+</section>
