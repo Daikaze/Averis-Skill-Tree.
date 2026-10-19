@@ -1,442 +1,286 @@
-import {MODULE_ID as MOD, SKILLS, EFFECT_KEYS, AFFINITIES, CLASS_KEYS, starterTrees, defaultProgress, xpNeeded} from './data.js';
+import {
+ MODULE_ID, PRESETS, DEFAULT_CONFIG, normalizeTemplate, normalizeLedger,
+ failureReason, commitBound, resolveBonus, oppositeSides, distanceFeet
+} from "./rules.mjs";
 
-const {ApplicationV2, HandlebarsApplicationMixin, DialogV2}=foundry.applications.api;
-const clone=v=>foundry.utils.deepClone(v);
-const escapeHtml=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const slug=v=>String(v??'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9-]+/g,'-').replace(/^-+|-+$/g,'');
-const number=(v,fallback=0)=>Number.isFinite(Number(v))?Number(v):fallback;
-const integer=(v,fallback=0)=>Math.trunc(number(v,fallback));
-const alert=(type,message)=>ui.notifications[type](`Averis Skill Tree | ${message}`);
-const has=v=>v!==null && v!==undefined;
-function trees(){return clone(game.settings.get(MOD,'trees')??[]);}
-function getProgress(actor){
-  const source=actor.getFlag(MOD,'progress')??{};
-  const p={...defaultProgress(),...clone(source)};
-  p.level=Math.max(1,Math.min(100,integer(p.level,1)));
-  p.xp=Math.max(0,integer(p.xp));
-  p.bonusPoints=Math.max(0,integer(p.bonusPoints));
-  p.spent=Math.max(0,integer(p.spent));
-  p.ranks=typeof p.ranks==='object'&&p.ranks!==null&&!Array.isArray(p.ranks)?{...p.ranks}:{};
-  p.affinities=Array.isArray(p.affinities)?[...new Set(p.affinities.map(x=>String(x).toLowerCase()))]:[];
-  return p;
-}
-const freePoints=p=>Math.max(0,p.level+p.bonusPoints-p.spent);
-const canEdit=actor=>!!(game.user.isGM||actor.isOwner);
-function permittedTrees(actor,p){
-  const classes=new Set(actor.items.filter(it=>it.type==='class').map(it=>slug(it.system?.identifier||it.name)));
-  const classesMatch=new Set([...classes,...[...classes].map(n=>n.split('-')[0])]);
-  return trees().filter(t=>t.scope==='common'||
-    (t.scope==='class'&&classesMatch.has(t.key))||
-    (t.scope==='affinity'&&p.affinities.includes(t.key))||
-    (t.scope==='character'&&t.key===actor.id));
-}
-const investedAnywhere=id=>game.actors.some(a=>number(a.getFlag(MOD,'progress')?.ranks?.[id])>0);
-async function itemSource(uuid){
-  if(!uuid||typeof uuid!=='string')return null;
-  try {const d=await fromUuid(uuid);return d?.documentName==='Item'&&!d.parent?.documentName?.includes('Actor')?d:null;}
-  catch(error){console.warn(`${MOD} | Could not resolve ${uuid}`,error);return null;}
-}
-function nodeItem(node){
-  // A real dnd5e Spell is granted for spell nodes, with an Activity rather than
-  // an inert description. Unknown affinity mechanics stay as a Utility Activity.
-  const activation=['action','bonus','reaction'].includes(node.activation)?node.activation:'action';
-  const isSpell=node.kind==='spell';
-  const type=isSpell?'spell':'feat';
-  const activityId=foundry.utils.randomID(16);
-  const description=`<p>${escapeHtml(node.description??'').replaceAll('\n','<br>')}</p><p><em>Averis Skill Tree · ${escapeHtml(node.kind)} · Skill Lv. ${integer(node.minLevel,1)}+</em></p>`;
-  const activity={_id:activityId,type:'utility',name:node.name,activation:{type:activation,value:1}};
-  // These offensive class talents have explicit homebrew damage written into
-  // the preset. Create a native spell attack activity with that exact formula.
-  const text=String(node.description??'');
-  const attack=text.match(/(?:make (?:a )?(?:ranged )?spell attack)[^\n]*?for (\d+)d(\d+) (Force|Acid|Necrotic|Radiant|Fire|Cold|Thunder|Psychic|Poison|Lightning) damage/i);
-  if(attack&&node.scope!=='affinity'){
-    const dice=Number(attack[1]),faces=Number(attack[2]),element=attack[3].toLowerCase();
-    if(dice>=1&&dice<=20&&[4,6,8,10,12].includes(faces)){
-      activity.type='attack';
-      activity.attack={ability:'spellcasting',type:{value:'ranged',classification:'spell'}};
-      activity.damage={includeBase:false,parts:[{number:dice,denomination:faces,bonus:'',types:[element]}]};
-      const range=text.match(/(?:within|at) (\d+) ft/i);
-      if(range)activity.range={value:Number(range[1]),units:'ft',override:true};
-    }
-  }
-  const uses=Math.max(0,integer(node.uses,0));
-  if(uses){
-    // 5e Activities consume the Item's use pool independently of the item sheet.
-    activity.consumption={targets:[{type:'itemUses',value:'1'}]};
-  }
-  const system={description:{value:description},activities:{[activityId]:activity}};
-  if(isSpell){
-    // 0-level at-will native spell for custom Affinity skills: resource
-    // restriction is the Activity's one-use-per-rest, not a class spell slot.
-    system.level=0;
-    system.school='evo';
-    system.preparation={mode:'atwill',prepared:true};
-  }
-  if(uses)system.uses={max:String(uses),spent:0,recovery:[{period:node.recovery==='sr'?'sr':'lr',type:'recoverAll'}]};
-  return {name:node.name,type,img:node.img||'icons/svg/upgrade.svg',system,
-    flags:{[MOD]:{nodeId:node.id,generated:true}}};
-}
-async function grantNode(actor,node,rank){
-  const existingItem=actor.items.find(it=>it.getFlag(MOD,'nodeId')===node.id);
-  const existingEffect=actor.effects.find(e=>e.getFlag(MOD,'nodeId')===node.id);
-  if(node.grantType==='builtin'||node.grantType==='item'){
-    if(existingItem)return {type:'existing'};
-    let data;
-    if(node.grantType==='builtin')data=nodeItem(node);
-    else{
-      const source=await itemSource(node.itemUuid);
-      if(!source)throw Error('Свързаният D&D Item липсва. Точките не са изхарчени.');
-      data=source.toObject();delete data._id;delete data.id;
-      data.flags??={};data.flags[MOD]={nodeId:node.id,sourceUuid:source.uuid};
-    }
-    // Do not grant a class feature that the actor already earned natively.
-    if(actor.items.some(i=>i.name===data.name&&!i.getFlag(MOD,'nodeId')))
-      throw Error(`Героят вече има ${data.name} от друг източник. Не се удържат точки.`);
-    let created;
-    try {[created]=await actor.createEmbeddedDocuments('Item',[data]);}
-    catch(error){
-      // If a system minor revision rejects advanced Activity fields, grant a clean
-      // native feat instead of failing or creating broken data silently.
-      console.warn(`${MOD} | Activity creation failed, retrying with basic native feat`,error);
-      if(node.grantType!=='builtin')throw error;
-      data.system={description:data.system.description};
-      [created]=await actor.createEmbeddedDocuments('Item',[data]);
-      alert('warn',`${node.name}: създаден е като D&D Feature без Activity; провери го в Character Sheet.`);
-    }
-    if(!created)throw Error('Foundry не потвърди създаването на Item.');
-    return {type:'item',id:created.id};
-  }
-  let key,value,mode;
-  if(node.grantType==='skill'){
-    if(!Object.hasOwn(SKILLS,node.skill))throw Error('Invalid D&D 5e skill key.');
-    key=`system.skills.${node.skill}.value`;value=String(rank>=2?2:1);
-    mode=CONST.ACTIVE_EFFECT_MODES.UPGRADE;
-  }else if(node.grantType==='effect'){
-    if(!Object.hasOwn(EFFECT_KEYS,node.effectKey))throw Error('Invalid dnd5e Active Effect key.');
-    if(!Number.isFinite(Number(node.amount))||Math.abs(Number(node.amount))>20)throw Error('Effect bonus must be between -20 and 20.');
-    key=node.effectKey;value=String(Number(node.amount)*rank);
-    mode=CONST.ACTIVE_EFFECT_MODES.ADD;
-  }else throw Error('Unrecognized grant type.');
-  const changes=[{key,value,mode,priority:20}];
-  if(existingEffect){
-    const before={changes:clone(existingEffect.changes),disabled:existingEffect.disabled,name:existingEffect.name};
-    await existingEffect.update({name:`Averis: ${node.name}`,disabled:false,changes});
-    return {type:'effect-update',id:existingEffect.id,before};
-  }
-  const [created]=await actor.createEmbeddedDocuments('ActiveEffect',[{
-    name:`Averis: ${node.name}`,img:'icons/svg/upgrade.svg',disabled:false,
-    changes,flags:{[MOD]:{nodeId:node.id}}
-  }]);
-  if(!created)throw Error('Foundry did not confirm the Active Effect.');
-  return {type:'effect',id:created.id};
-}
-async function rollbackGrant(actor,receipt){
-  try{
-    if(receipt?.type==='item')await actor.deleteEmbeddedDocuments('Item',[receipt.id]);
-    if(receipt?.type==='effect')await actor.deleteEmbeddedDocuments('ActiveEffect',[receipt.id]);
-    if(receipt?.type==='effect-update')await actor.effects.get(receipt.id)?.update(receipt.before);
-  }catch(error){console.error(`${MOD} | Undo failed; manual cleanup needed`,error);alert('error','Неуспешен rollback. Провери Items / Effects на героя!');}
-}
-async function removeGrants(actor){
-  const items=actor.items.filter(i=>i.getFlag(MOD,'nodeId')).map(i=>i.id);
-  const effects=actor.effects.filter(e=>e.getFlag(MOD,'nodeId')).map(e=>e.id);
-  if(items.length)await actor.deleteEmbeddedDocuments('Item',items);
-  if(effects.length)await actor.deleteEmbeddedDocuments('ActiveEffect',effects);
-}
-const dialogField=(label,name,value='',opts={})=>`<label class="averis-field"><span>${escapeHtml(label)}</span><input type="${opts.type??'text'}" name="${escapeHtml(name)}" value="${escapeHtml(value)}" ${has(opts.min)?`min="${opts.min}"`:''} ${has(opts.max)?`max="${opts.max}"`:''} ${opts.required?'required':''}></label>`;
-const dialogSelect=(label,name,value,options)=>`<label class="averis-field"><span>${escapeHtml(label)}</span><select name="${escapeHtml(name)}">${options.map(([v,t])=>`<option value="${escapeHtml(v)}" ${v===value?'selected':''}>${escapeHtml(t)}</option>`).join('')}</select></label>`;
-// DialogV2.input returns FormDataExtended.object (a plain object), NOT FormData.
-const value=(data,name)=>data?.[name]??'';
-const fromNumber=(data,name)=>{const n=Number(value(data,name));return Number.isSafeInteger(n)?n:NaN;};
+const SOCKET = `module.${MODULE_ID}`;
+const log = (...args) => console.log(`[Averis Bound]`, ...args);
+let gmQueue = Promise.resolve();
+const seen = new Set();
+const MAX_REQUESTS = 500;
+const lastRequest = new Map();
 
-class SkillTreeWindow extends HandlebarsApplicationMixin(ApplicationV2){
- static DEFAULT_OPTIONS={
-   id:'averis-skill-tree',classes:['averis-skill-tree'],
-   window:{title:'Averis Skill Tree',icon:'fa-solid fa-code-branch',resizable:true},
-   position:{width:1100,height:770},
-   actions:{
-     selectTree:SkillTreeWindow.actionSelectTree,invest:SkillTreeWindow.actionInvest,
-     grantXp:SkillTreeWindow.actionGrantXp,grantPoints:SkillTreeWindow.actionGrantPoints,
-     affinities:SkillTreeWindow.actionAffinities,addTree:SkillTreeWindow.actionAddTree,
-     editTree:SkillTreeWindow.actionEditTree,deleteTree:SkillTreeWindow.actionDeleteTree,
-     addNode:SkillTreeWindow.actionAddNode,editNode:SkillTreeWindow.actionEditNode,
-     deleteNode:SkillTreeWindow.actionDeleteNode,reset:SkillTreeWindow.actionReset,
-     openItem:SkillTreeWindow.actionOpenItem
-   }
- };
- static PARTS={main:{template:`modules/${MOD}/templates/main.hbs`}};
- constructor(actor){
-   super({id:`averis-skill-tree-${actor.id}`,window:{title:`Averis Skills · ${actor.name}`}});
-   this.actor=actor;this.treeId=null;this.busy=false;
- }
- async _prepareContext(){
-   const p=getProgress(this.actor),available=permittedTrees(this.actor,p);
-   if(!available.some(t=>t.id===this.treeId))this.treeId=available[0]?.id??null;
-   const current=available.find(t=>t.id===this.treeId);
-   const list=available.map(t=>({...t,selected:t.id===this.treeId,
-     isCommon:t.scope==='common',isClass:t.scope==='class',isAffinity:t.scope==='affinity'}));
-   const groups=[];
-   const maxTier=Math.min(30,Math.max(0,...(current?.nodes??[]).map(n=>integer(n.tier))));
-   for(let tier=1;tier<=maxTier;tier++){
-     const nodes=(current?.nodes??[]).filter(n=>integer(n.tier)===tier).map(n=>{
-       const rank=Math.max(0,integer(p.ranks[n.id]));const maxRank=Math.max(1,integer(n.maxRank,1));
-       const minLevel=Math.max(1,integer(n.minLevel,1));const cost=Math.max(1,integer(n.cost,1));
-       const missing=(n.requires??[]).filter(id=>!integer(p.ranks[id]));
-       const reasons=[];
-       if(p.level<minLevel)reasons.push(`Skill Lv. ${minLevel} required`);
-       if(missing.length)reasons.push('Requires: '+missing.map(id=>current.nodes.find(a=>a.id===id)?.name??id).join(', '));
-       if(n.grantType==='item'&&!n.itemUuid)reasons.push('Item UUID missing');
-       if(freePoints(p)<cost)reasons.push(`${cost} point(s) needed`);
-       if(!canEdit(this.actor))reasons.push('Not your character');
-       const maxed=rank>=maxRank;
-       return {...n,rank,maxRank,minLevel,cost,maxed,unlocked:rank>0,
-         rankPct:Math.round(rank*100/maxRank),lockReason:reasons.join(' · '),canInvest:!this.busy&&!maxed&&!reasons.length,
-         showOpen:(n.grantType==='item'||n.grantType==='builtin')&&rank>0,
-         isSpell:n.kind==='spell',isSkill:n.kind==='skill',isAttack:n.kind==='attack',isPassive:n.kind==='passive',
-         grantLabel:n.grantType==='skill'?'D&D 5e Proficiency / Expertise':n.grantType==='effect'?'D&D 5e Active Effect':'D&D 5e Item',
-         canRemove:game.user.isGM&&n.id.startsWith('node-')&&!investedAnywhere(n.id)
-       };
-     });
-     if(nodes.length)groups.push({tier,nodes});
-   }
-   return {actor:this.actor,actorImage:this.actor.img,isGM:game.user.isGM,canEdit:canEdit(this.actor),
-     progress:p,trees:list,tree:current,groups,free:freePoints(p),needed:xpNeeded(p.level),
-     xpPct:Math.min(100,p.xp/xpNeeded(p.level)*100),hasTrees:available.length>0,busy:this.busy,isCustomCurrent:current?.id?.startsWith('custom-')??false};
- }
- refresh(){return this.render();}
- static actionSelectTree(_event,target){this.treeId=target.dataset.tree;return this.refresh();}
- static actionInvest(_event,target){return this.invest(target.dataset.node);}
- static actionGrantXp(){return this.grantXp();}
- static actionGrantPoints(){return this.grantPoints();}
- static actionAffinities(){return this.assignAffinities();}
- static actionAddTree(){return this.editTree(null);}
- static actionEditTree(){return this.editTree(this.treeId);}
- static actionDeleteTree(){return this.deleteTree();}
- static actionAddNode(){return this.editNode(null);}
- static actionEditNode(_e,t){return this.editNode(t.dataset.node);}
- static actionDeleteNode(_e,t){return this.deleteNode(t.dataset.node);}
- static actionReset(){return this.resetProgress();}
- static actionOpenItem(_e,t){return this.openItem(t.dataset.node);}
- async invest(id){
-   if(this.busy||!canEdit(this.actor))return;
-   this.busy=true;let receipt=null;
-   try{
-     const p=getProgress(this.actor),tree=permittedTrees(this.actor,p).find(t=>t.id===this.treeId),node=tree?.nodes.find(n=>n.id===id);
-     if(!node)throw Error('Тази способност вече не е достъпна.');
-     const rank=integer(p.ranks[id]);const cost=integer(node.cost,1);
-     if(rank>=integer(node.maxRank,1))throw Error('Максимално ниво на способността.');
-     if(p.level<integer(node.minLevel,1))throw Error('Недостатъчно Skill Level.');
-     if((node.requires??[]).some(r=>!integer(p.ranks[r])))throw Error('Липсва изисквана способност.');
-     if(freePoints(p)<cost)throw Error('Нямаш достатъчно Skill Points.');
-     if(node.grantType==='item'&&!node.itemUuid)throw Error('GM трябва да свърже D&D Item.');
-     receipt=await grantNode(this.actor,node,rank+1);
-     p.ranks[id]=rank+1;p.spent+=cost;
-     try{await this.actor.setFlag(MOD,'progress',p);}
-     catch(error){await rollbackGrant(this.actor,receipt);throw error;}
-     alert('info',`${this.actor.name}: ${node.name} rank ${rank+1} unlocked.`);
-   }catch(error){console.error(`${MOD} | Purchase error`,error);alert('error',error.message||String(error));}
-   finally{this.busy=false;await this.refresh();}
- }
- async grantXp(){
-   if(!game.user.isGM||this.busy)return;
-   const fd=await DialogV2.input({window:{title:`Skill XP · ${this.actor.name}`},
-     content:`<div class="averis-dialog">${dialogField('XP to add (negative removes unused XP)','amount',100,{type:'number',required:true})}<p class="hint">One Skill Point for every Skill Level. Normal D&D character XP and class level are unchanged.</p></div>`,
-     ok:{label:'Apply Skill XP'},rejectClose:false});
-   if(!fd)return;
-   const amount=fromNumber(fd,'amount');
-   if(!Number.isSafeInteger(amount)||Math.abs(amount)>1000000)return alert('warn','Enter an integer between -1,000,000 and 1,000,000.');
-   this.busy=true;
-   try{
-     const p=getProgress(this.actor);
-     // Do not reduce already-earned levels: doing so invalidates invested skill points.
-     p.xp=Math.max(0,p.xp+amount);
-     let gained=0;
-     while(p.level<100&&p.xp>=xpNeeded(p.level)){p.xp-=xpNeeded(p.level);p.level++;gained++;}
-     if(p.level===100)p.xp=0;
-     await this.actor.setFlag(MOD,'progress',p);
-     alert('info',`${this.actor.name}: ${amount>=0?'+':''}${amount} Skill XP${gained?` · +${gained} Skill Level` :''}`);
-   }catch(e){console.error(`${MOD} | XP`,e);alert('error',e.message||String(e));}
-   finally{this.busy=false;await this.refresh();}
- }
- async grantPoints(){
-   if(!game.user.isGM||this.busy)return;
-   const fd=await DialogV2.input({window:{title:`Bonus Skill Points · ${this.actor.name}`},
-     content:`<div class="averis-dialog">${dialogField('Bonus points (+1 to +100)','amount',1,{type:'number',min:1,max:100,required:true})}</div>`,
-     ok:{label:'Grant Points'},rejectClose:false});
-   if(!fd)return;
-   const amount=fromNumber(fd,'amount');if(!Number.isInteger(amount)||amount<1||amount>100)return alert('warn','Choose 1–100 points.');
-   try{const p=getProgress(this.actor);p.bonusPoints+=amount;await this.actor.setFlag(MOD,'progress',p);await this.refresh();}
-   catch(error){alert('error',error.message||String(error));}
- }
- async assignAffinities(){
-   if(!game.user.isGM||this.busy)return;
-   const p=getProgress(this.actor);
-   const fields=AFFINITIES.map(a=>{
-     const key=a.toLowerCase();return `<label><input type="checkbox" name="af-${key}" value="true" ${p.affinities.includes(key)?'checked':''}><span>${escapeHtml(a)}</span></label>`;
-   }).join('');
-   const fd=await DialogV2.input({window:{title:`Assign Affinities · ${this.actor.name}`},
-     content:`<div class="averis-dialog"><p class="hint">Choose unlocked elements. Uncheck all for No Mana. Already purchased abilities remain on the Actor, so removing an invested Affinity is blocked.</p><div class="averis-check-grid">${fields}</div></div>`,
-     ok:{label:'Save Affinities'},rejectClose:false});
-   if(!fd)return;
-   const selected=AFFINITIES.map(a=>a.toLowerCase()).filter(k=>['true',true,'on','1',1].includes(value(fd,`af-${k}`)));
-   const removed=p.affinities.filter(a=>!selected.includes(a));
-   const all=trees();const occupied=removed.filter(key=>all.some(t=>t.scope==='affinity'&&t.key===key&&t.nodes.some(n=>integer(p.ranks[n.id])>0)));
-   if(occupied.length)return alert('warn',`Не можеш да махнеш изучен Affinity (${occupied.join(', ')}). Първо reset на героя.`);
-   try{p.affinities=selected;await this.actor.setFlag(MOD,'progress',p);this.treeId=null;await this.refresh();alert('info',`Affinities saved for ${this.actor.name}.`);}
-   catch(error){console.error(`${MOD} | Assign affinity`,error);alert('error',error.message||String(error));}
- }
- async editTree(id){
-   if(!game.user.isGM)return;
-   const list=trees(),existing=list.find(t=>t.id===id);
-   const fd=await DialogV2.input({window:{title:existing?'Edit Skill Tree':'New Skill Tree'},
-     content:`<div class="averis-dialog">${dialogField('Tree name','name',existing?.name??'New Tree',{required:true})}
-     ${dialogSelect('Tree scope','scope',existing?.scope??'common', [['common','General'],['class','Class'],['affinity','Affinity'],['character','Character']])}
-     ${dialogField('Class/Affinity key (e.g. paladin, fire)','key',existing?.key??'')}
-     <p class="hint">Built-in General/Class/Affinity trees are preloaded. You only need this for custom content.</p></div>`,
-     ok:{label:'Save'},rejectClose:false});
-   if(!fd)return;
-   const name=String(value(fd,'name')).trim().slice(0,90),scope=String(value(fd,'scope'));
-   const key=scope==='character'?this.actor.id:scope==='common'?'':slug(value(fd,'key'));
-   if(!name||!['common','class','affinity','character'].includes(scope)||(!key&&scope!=='common'))return alert('warn','Invalid tree name/scope/key.');
-   if(existing){if(existing.nodes.some(n=>investedAnywhere(n.id))&&(scope!==existing.scope||key!==existing.key))return alert('warn','Cannot change scope of invested tree.');Object.assign(existing,{name,scope,key});}
-   else{const id=`custom-${foundry.utils.randomID(12)}`;list.push({id,name,scope,key,icon:'fa-solid fa-code-branch',nodes:[]});this.treeId=id;}
-   try{await game.settings.set(MOD,'trees',list);await this.refresh();}catch(e){alert('error',e.message||String(e));}
- }
- async deleteTree(){
-   if(!game.user.isGM)return;
-   const list=trees(),current=list.find(t=>t.id===this.treeId);if(!current)return;
-   if(!current.id.startsWith('custom-'))return alert('warn','System trees cannot be deleted; you can edit or create custom trees.');
-   if(current.nodes.some(n=>investedAnywhere(n.id)))return alert('warn','Tree has invested abilities. Reset affected characters first.');
-   if(!await DialogV2.confirm({window:{title:'Delete Custom Tree'},content:`Delete <b>${escapeHtml(current.name)}</b>?`,rejectClose:false}))return;
-   try{await game.settings.set(MOD,'trees',list.filter(t=>t.id!==current.id));this.treeId=null;await this.refresh();}
-   catch(e){alert('error',e.message||String(e));}
- }
- async editNode(nodeId){
-   if(!game.user.isGM)return;
-   const list=trees(),tree=list.find(t=>t.id===this.treeId);if(!tree)return;
-   const n=tree.nodes.find(n=>n.id===nodeId);
-   if(n&&investedAnywhere(n.id))return alert('warn','This ability is already invested. Reset affected characters before editing.');
-   const fd=await DialogV2.input({window:{title:n?'Edit Ability':'New Ability'},
-     content:`<div class="averis-dialog">
-     ${dialogField('Name','name',n?.name??'New Ability',{required:true})}
-     ${dialogSelect('D&D Type','kind',n?.kind??'feature',[['skill','D&D Skill'],['attack','Attack'],['spell','Spell'],['feature','Feature'],['passive','Passive']])}
-     ${dialogSelect('Grant automatically as','grantType',n?.grantType??'builtin',[['builtin','Built-in D&D 5e Feature (no UUID)'],['skill','Proficiency / Expertise'],['effect','Active Effect bonus'],['item','Linked World/Compendium Item']])}
-     <div class="averis-pair">${dialogField('Tier','tier',n?.tier??1,{type:'number',min:1,max:20})}${dialogField('Min Skill Level','minLevel',n?.minLevel??1,{type:'number',min:1,max:100})}</div>
-     <div class="averis-pair">${dialogField('Max Ranks','maxRank',n?.maxRank??1,{type:'number',min:1,max:10})}${dialogField('Cost per Rank','cost',n?.cost??1,{type:'number',min:1,max:10})}</div>
-     ${dialogField('Prerequisite IDs (comma-separated)','requires',(n?.requires??[]).join(', '))}
-     ${dialogSelect('Skill','skill',n?.skill??'arc',Object.entries(SKILLS))}
-     ${dialogSelect('Effect Target','effectKey',n?.effectKey??'system.attributes.init.roll.bonus',Object.entries(EFFECT_KEYS))}
-     ${dialogField('Bonus per rank','amount',n?.amount??1,{type:'number',min:-20,max:20})}
-     ${dialogSelect('Activation','activation',n?.activation??'action',[['action','Action'],['bonus','Bonus Action'],['reaction','Reaction']])}
-     ${dialogField('Item UUID (linked only)','itemUuid',n?.itemUuid??'')}
-     <label class="averis-field">Description<textarea rows="5" name="description">${escapeHtml(n?.description??'')}</textarea></label></div>`,
-     ok:{label:'Save Ability'},rejectClose:false});
-   if(!fd)return;
-   const name=String(value(fd,'name')).trim().slice(0,100),kind=String(value(fd,'kind'));
-   const grantType=String(value(fd,'grantType'));
-   if(!name||!['skill','attack','spell','feature','passive'].includes(kind)||!['builtin','skill','effect','item'].includes(grantType))return alert('warn','Invalid name or type.');
-   const requires=String(value(fd,'requires')).split(',').map(x=>x.trim()).filter(Boolean);
-   if(!requires.every(id=>id!==nodeId&&tree.nodes.some(t=>t.id===id)))return alert('warn','Invalid prerequisite IDs.');
-   const itemUuid=String(value(fd,'itemUuid')).trim();
-   if(grantType==='item'&&!await itemSource(itemUuid))return alert('warn','Enter a valid world/compendium D&D Item UUID.');
-   const maxRank=['builtin','item'].includes(grantType)?1:Math.min(10,Math.max(1,fromNumber(fd,'maxRank')||1));
-   const minLevel=fromNumber(fd,'minLevel'),tier=fromNumber(fd,'tier'),cost=fromNumber(fd,'cost');
-   if(![minLevel,tier,cost].every(Number.isSafeInteger)||minLevel<1||tier<1||cost<1||tier>20||minLevel>100||cost>10)return alert('warn','Invalid level, tier or cost.');
-   const changes={name,kind,grantType,requires,itemUuid,maxRank,minLevel,tier,cost,
-     skill:String(value(fd,'skill')),effectKey:String(value(fd,'effectKey')),amount:number(value(fd,'amount'),1),
-     activation:String(value(fd,'activation')),description:String(value(fd,'description')).slice(0,2000)};
-   if(n)Object.assign(n,changes);else tree.nodes.push({id:`node-${foundry.utils.randomID(14)}`,...changes});
-   try{await game.settings.set(MOD,'trees',list);await this.refresh();}catch(e){alert('error',e.message||String(e));}
- }
- async deleteNode(id){
-   if(!game.user.isGM)return;
-   const list=trees(),tree=list.find(t=>t.id===this.treeId),node=tree?.nodes.find(n=>n.id===id);
-   if(!node)return;
-   if(!id.startsWith('node-'))return alert('warn','Built-in abilities are protected; you can edit but not delete them.');
-   if(investedAnywhere(id))return alert('warn','An actor has unlocked this ability.');
-   if(tree.nodes.some(n=>n.requires?.includes(id)))return alert('warn','Other abilities depend on this one.');
-   if(!await DialogV2.confirm({window:{title:'Delete Ability'},content:`Delete <b>${escapeHtml(node.name)}</b>?`,rejectClose:false}))return;
-   tree.nodes=tree.nodes.filter(n=>n.id!==id);
-   try{await game.settings.set(MOD,'trees',list);await this.refresh();}catch(e){alert('error',e.message||String(e));}
- }
- openItem(id){
-   const item=this.actor.items.find(it=>it.getFlag(MOD,'nodeId')===id);
-   if(item)return item.sheet.render(true);
-   alert('warn','The unlocked D&D Item is missing from your Character Sheet.');
- }
- async resetProgress(){
-   if(!game.user.isGM||this.busy)return;
-   if(!await DialogV2.confirm({window:{title:'Reset Averis Skills'},
-     content:`Reset <b>${escapeHtml(this.actor.name)}</b> to Skill Level 1, lose earned XP and only remove items/effects that the module itself granted? This is irreversible.`,rejectClose:false}))return;
-   this.busy=true;
-   try{await removeGrants(this.actor);await this.actor.setFlag(MOD,'progress',defaultProgress());this.treeId=null;alert('info','Character skill progression reset.');}
-   catch(e){console.error(`${MOD} | reset`,e);alert('error',`Reset incomplete: ${e.message||e}`);}
-   finally{this.busy=false;await this.refresh();}
- }
+function notify(message, kind="warn") { ui.notifications?.[kind]?.(message); }
+function esc(value) { return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function D() { return foundry.applications.api.DialogV2; }
+function cfg() { return { ...DEFAULT_CONFIG, usesPerEncounter:game.settings.get(MODULE_ID,"usesPerEncounter"), cooldownRounds:game.settings.get(MODULE_ID,"cooldownRounds"), preventRepeat:game.settings.get(MODULE_ID,"preventRepeat"), requireOpposite:game.settings.get(MODULE_ID,"requireOpposite"), allowOutOfCombat:game.settings.get(MODULE_ID,"allowOutOfCombat") }; }
+function templates() {
+ const custom=game.settings.get(MODULE_ID,"customTemplates")??[];
+ return [...PRESETS,...custom].map(t=>({...t}));
 }
-
-const windows=new Map();
-async function openTree(actor){
- if(!actor)return alert('warn','Select a character token, or open a character sheet first.');
- if(actor.type!=='character')return alert('warn','Only D&D 5e characters are supported.');
- if(!canEdit(actor))return alert('warn','No permission to edit this character.');
- const old=windows.get(actor.uuid);if(old?.rendered){old.bringToFront();return old;}
- const app=new SkillTreeWindow(actor);windows.set(actor.uuid,app);await app.render(true);return app;
+function oneTemplate(id) {return templates().find(x=>x.id===id);}
+function isGMCoordinator() { return !!game.user?.isGM && game.users.activeGM?.id===game.user.id; }
+function activeScene() { return canvas?.scene; }
+function activeCombat() {
+ const c=game.combat;
+ if(!c?.started || c.ended || c.scene?.id!==activeScene()?.id) return null;
+ return c;
 }
-function addSheetButton(app,element){
- const actor=app.actor??app.document;
- if(!actor||actor.documentName!=='Actor'||actor.type!=='character'||!canEdit(actor))return;
- if(!(element instanceof HTMLElement)||element.querySelector('.averis-open-tree'))return;
- const btn=document.createElement('button');btn.type='button';btn.className='averis-open-tree';
- btn.innerHTML='<i class="fa-solid fa-code-branch"></i> Skill Tree';btn.title='Open Averis Skill Tree';
- btn.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();void openTree(actor);});
- const dest=element.querySelector('.sheet-header,.character-header,.header-details,.sheet-heading,.window-content')??element;
- dest.prepend(btn);
+function scopeDoc(){return activeCombat()??activeScene();}
+function actorKey(t){return String(t.actor?.uuid??"");}
+function getTokens(){return (canvas?.tokens?.placeables??[]).filter(t=>t.actor?.type==="character"&&t.document?.id);}
+function permissionToPropose(t){return game.user.isGM || !!t?.actor?.testUserPermission?.(game.user,"OWNER");}
+function editablePairTokens(){return getTokens().filter(t=>t.actor?.isOwner||game.user.isGM);}
+function center(t) {return t.center??{x:(t.document.x??0)+t.w/2,y:(t.document.y??0)+t.h/2};}
+function feet(a,b) {return distanceFeet(center(a),center(b),canvas?.dimensions?.size,canvas?.dimensions?.distance);}
+function selectedTokenOrNull() {return canvas.tokens?.controlled?.find(t=>t.actor?.type==="character")??null;}
+function selectedTargetOrNull(){return [...(game.user.targets??[])].find(t=>t.scene?.id===activeScene()?.id)??null;}
+function ledgerOf(doc){return normalizeLedger(doc?.getFlag(MODULE_ID,"ledger"));}
+function optionsHtml(arr,value="") { return arr.map(x=>`<option value="${esc(x.id)}" ${x.id===value?"selected":""}>${esc(x.name)}</option>`).join(""); }
+function choicesAll(){return getTokens().map(t=>({id:t.id,name:`${t.name} (${t.id.slice(-4)})`}));}
+function normalizedInput(raw) {
+ if(!raw)return null;
+ if(raw instanceof FormData)return Object.fromEntries(raw.entries());
+ if(raw?.object && typeof raw.object === "object") return raw.object;
+ if(typeof raw==="object")return raw;
+ return null;
 }
-function mergeWorldTrees(previous){
- const newTrees=starterTrees();const current=new Map((previous??[]).map(t=>[t.id,t]));
- const defaults=newTrees.map(t=>{
-   const old=current.get(t.id);if(!old)return t;
-   // Keep user-created abilities and explicit GM item links, but remove unlinked
-   // v0.1 autogenerated placeholders (they could not be bought anyway).
-   const extra=(old.nodes??[]).filter(n=>{
-     const isFromOld=n.id.startsWith('explore-')||n.id.startsWith('martial-')||n.id.startsWith('magic-')||
-       CLASS_KEYS.some(c=>n.id===`${c}-training`||n.id===`${c}-technique`||n.id===`${c}-mastery`)
-       ||AFFINITIES.some(a=>n.id===`${a.toLowerCase()}-level-${n.tier}`);
-     return !isFromOld||!!n.itemUuid||investedAnywhere(n.id);
-   });
-   const existingIds=new Set(t.nodes.map(n=>n.id));
-   return {...t,nodes:[...t.nodes,...extra.filter(n=>!existingIds.has(n.id))]};
+function safeId(value) {const str=String(value??"");return /^[a-zA-Z0-9_-]{4,64}$/.test(str)?str:"";}
+function cleanError(err) {const msg=String(err?.message??err??"Unexpected error");log("Error",err);notify(`Bound: ${msg.slice(0,240)}`,"error");}
+function addSeen(id){seen.add(id);if(seen.size>MAX_REQUESTS)seen.delete(seen.values().next().value);}
+function enqueue(job){gmQueue=gmQueue.catch(()=>{}).then(job).catch(cleanError);return gmQueue;}
+function confirmedMode(t){return t.category==="melee"||t.category==="ranged"||t.category==="spell";}
+function checkAlive(t){
+ const hp=t.actor?.system?.attributes?.hp?.value;
+ const condition=t.actor?.statuses;
+ return (typeof hp!=="number"||hp>0)&&!condition?.has?.("dead")&&!condition?.has?.("unconscious");
+}
+function validate(req,{strict=true}={}) {
+ const scene=activeScene();if(!scene)throw Error("Open a canvas scene first.");
+ const t1=canvas.tokens.get(req.tokenA),t2=canvas.tokens.get(req.tokenB);
+ if(!t1||!t2||t1.id===t2.id||t1.actor?.type!=="character"||t2.actor?.type!=="character")throw Error("Select two distinct character tokens on the same scene.");
+ if(!checkAlive(t1)||!checkAlive(t2))throw Error("Bound requires both characters to be conscious and alive.");
+ const template=oneTemplate(req.templateId);
+ if(!template)throw Error("Bound variant no longer exists.");
+ const combat=activeCombat();
+ if(!combat&&!cfg().allowOutOfCombat)throw Error("An active combat is required by GM settings.");
+ if(combat){
+   if(!combat.combatants.some(c=>c.tokenId===t1.id && c.sceneId!=="_invalid") || !combat.combatants.some(c=>c.tokenId===t2.id && c.sceneId!=="_invalid"))throw Error("Both tokens must have combatants in the current initiative.");
+ }
+ const target=req.targetId?canvas.tokens.get(req.targetId):null;
+ if(template.target && (!target||target.id===t1.id||target.id===t2.id))throw Error("This variant needs a different target token.");
+ if(target && !checkAlive(target) && confirmedMode(template))throw Error("The selected target is already down.");
+ if(target && template.reach>0 && confirmedMode(template)){
+   if(feet(t1,target)>template.reach+0.01 || feet(t2,target)>template.reach+0.01)throw Error(`Both allies must be within ${template.reach} ft of the target.`);
+ }
+ if(!target && template.reach>0 && !confirmedMode(template) && feet(t1,t2)>template.reach+0.01)throw Error(`This Bound requires allies within ${template.reach} ft of each other.`);
+ if(target && template.opposite && cfg().requireOpposite && !oppositeSides(center(t1),center(t2),center(target))) throw Error("Allies must stand on opposite sides of the target (flanking formation).");
+ const doc=scopeDoc();if(!doc)throw Error("There is no encounter or scene to track Bound uses.");
+ const round=combat?.round??null;
+ const reason=failureReason({ledger:ledgerOf(doc),a:actorKey(t1),b:actorKey(t2),round,combat:!!combat,config:cfg()});
+ if(reason)throw Error(reason);
+ if(strict && !doc.canUserModify(game.user,"update"))throw Error("Active GM cannot modify encounter state.");
+ return {scene,doc,combat,round,t1,t2,target,template};
+}
+function chatContent({template,t1,t2,target,round,id,gmName,scope}){
+ return `<div class="averis-bound-chat">
+ <h3>⚔ Averis Bound · ${esc(template.title)}</h3>
+ <div class="bound-pills"><span>${esc(t1.name)}</span><span>+</span><span>${esc(t2.name)}</span><span>${esc(template.category.toUpperCase())}</span></div>
+ <p><strong>Action Economy:</strong> ${esc(template.action)}<br><strong>Target:</strong> ${esc(target?.name??"Ally / Scene (GM chooses)")}<br><strong>Encounter:</strong> ${esc(scope)}${round?` · Round ${round}`:""}</p>
+ <p>${esc(template.rules)}</p>
+ <p><strong>Condition:</strong> ${esc(template.trigger)}</p>
+ ${template.formula?`<p><strong>Optional shared roll:</strong> ${esc(template.formula)} (${esc(template.bonusKind)}) — GM adjudicates, then rolls it once.</p>
+ <button type="button" data-averis-bound-resolve="${esc(id)}" title="GM only: roll the one-time combination bonus">🎲 GM: Resolve shared bonus</button>`:""}
+ <small>Bound ignores exhaustion penalties of levels 1–2 for the combined maneuver only; it does not remove the exhaustion condition. For exhaustion 3+, apply usual D&D restrictions. Both participants use normal dnd5e actions, slots, ammunition, concentration and character-sheet rolls. Uses consumed once GM confirms. ${esc(gmName)}</small>
+ </div>`;
+}
+async function createBound(req){
+ if(!isGMCoordinator())return;
+ if(seen.has(req.requestId))return;
+ addSeen(req.requestId);
+ const last=lastRequest.get(req.fromUserId)??0;
+ if(Date.now()-last<900)throw Error("Rate limited: please retry your request in a moment.");
+ lastRequest.set(req.fromUserId,Date.now());
+ const {scene,doc,combat,round,t1,t2,target,template}=validate(req);
+ const owner=game.users.get(req.fromUserId);
+ const requester=owner?.name??"Unknown sender (identity not authenticated)";
+ const approved=await D().confirm({
+   window:{title:"Averis Bound · GM approval"},
+   content:`<div class="averis-bound-form"><p><strong>Requested by:</strong> ${esc(requester)}</p><p><strong>${esc(t1.name)} + ${esc(t2.name)}</strong></p><p><strong>Variant:</strong> ${esc(template.title)}<br><strong>Target:</strong> ${esc(target?.name??"—")}</p><p class="averis-bound-note">Confirm both participants agree, have their Actions/Reactions, and satisfy any spell or weapon requirements. The GM is the authoritative final approver.</p><div class="averis-bound-info">${esc(template.rules)}</div></div>`,
+   yes:{label:"Approve & spend Bound uses"},no:{label:"Reject"},rejectClose:false
  });
- const legacy=new Set(['common-exploration','common-martial','common-magic']);
- return [...defaults,...(previous??[]).filter(t=>{
-   if(newTrees.some(n=>n.id===t.id))return false;
-   if(!legacy.has(t.id))return true;
-   return (t.nodes??[]).some(n=>investedAnywhere(n.id)||n.id.startsWith('node-')||!!n.itemUuid);
- })];
+ if(!approved){game.socket?.emit(SOCKET,{type:"result",id:req.requestId,toUserId:req.fromUserId,ok:false,title:"GM declined this Bound request"});return;}
+ // Re-validate AFTER the GM's asynchronous confirmation, since round, token location,
+ // scene, uses, or the target may have changed while the confirmation was open.
+ if(activeScene()?.id!==scene.id || scopeDoc()?.uuid!==doc.uuid)throw Error("Scene or encounter changed during approval. Request canceled.");
+ const latest=validate(req);
+ const before=ledgerOf(latest.doc);
+ const next=commitBound(before,{id:req.requestId,a:actorKey(latest.t1),b:actorKey(latest.t2),round:latest.round,combat:!!latest.combat,templateId:template.id,targetId:target?.id,gmId:game.user.id,sceneId:scene.id,at:Date.now()});
+ // Sole active GM serializes all writes. A single document flag is the source of truth.
+ await latest.doc.setFlag(MODULE_ID,"ledger",next);
+ try{
+   await ChatMessage.create({speaker:ChatMessage.getSpeaker({actor:latest.t1.actor,token:latest.t1.document}),content:chatContent({...latest,id:req.requestId,gmName:`Approved by ${game.user.name}`,scope:combat?"Combat":"Scene"}),flags:{[MODULE_ID]:{actionId:req.requestId,templateId:template.id,scopeUuid:latest.doc.uuid}}});
+ }catch(err){
+   // The ledger has already committed. Never silently refund or duplicate resource spend.
+   log("Chat post failed; ledger was committed",err);
+   notify("Bound was saved, but its chat card failed. Check the Bound status before trying again.","error");
+ }
+ game.socket?.emit(SOCKET,{type:"result",id:req.requestId,toUserId:req.fromUserId,ok:true,title:template.title});
+ notify(`Bound confirmed: ${t1.name} + ${t2.name} (${template.title})`,"info");
 }
-Hooks.once('init',()=>{
- game.settings.register(MOD,'trees',{name:'Averis tree definitions',scope:'world',config:false,type:Array,default:starterTrees()});
- game.settings.register(MOD,'dataVersion',{name:'Averis data version',scope:'world',config:false,type:Number,default:0});
- game.settings.register(MOD,'showSheetButton',{name:'Show Skill Tree button in Character Sheet',scope:'world',config:true,type:Boolean,default:true});
- game.modules.get(MOD).api={open:openTree,openSelected:()=>openTree(canvas.tokens?.controlled?.[0]?.actor??game.user.character),getProgress,trees, xpNeeded};
+async function resolveById(id,scopeUuid){
+ if(!isGMCoordinator())throw Error("Only the active GM can resolve a Bound bonus.");
+ const doc=scopeDoc();
+ if(doc?.uuid!==scopeUuid)throw Error("Switch back to the original encounter/scene to resolve this roll.");
+ const state=ledgerOf(doc),entry=state.entries.find(e=>e.id===id);
+ if(!entry)throw Error("Action not found in this encounter.");
+ const variant=oneTemplate(entry.templateId);
+ if(!variant?.formula)throw Error("No bonus roll is configured.");
+ if(entry.bonusResolved)throw Error("This Bound bonus has already been resolved.");
+ const yes=await D().confirm({window:{title:`Resolve ${variant.title}`},content:`<p>${esc(variant.trigger)}</p><p>Roll <strong>${esc(variant.formula)}</strong> as one shared <strong>${esc(variant.bonusKind)}</strong> bonus? The GM applies the result manually; it is never automatically deducted from or added to a character.</p>`,yes:{label:"Roll once"},no:{label:"Cancel"},rejectClose:false});
+ if(!yes)return;
+ // Reread the ledger after awaiting GM input and save resolved state BEFORE rolling.
+ // It is intentionally not automatically retried to prevent unintended double rolls.
+ const current=ledgerOf(doc);
+ if(!current.entries.some(e=>e.id===id&&!e.bonusResolved))throw Error("This bonus was already resolved or the action was reset.");
+ const roll=new Roll(variant.formula);
+ await roll.evaluate();
+ await doc.setFlag(MODULE_ID,"ledger",resolveBonus(current,id));
+ await roll.toMessage({speaker:ChatMessage.getSpeaker(),flavor:`Averis Bound — ${esc(variant.title)}: shared ${esc(variant.bonusKind)} bonus (GM applies manually)`});
+}
+async function open({actor=null}={}){
+ if(!activeScene())return notify("Open an Averis scene first.");
+ const all=getTokens(),mine=all.filter(permissionToPropose);
+ if(mine.length===0)return notify("You need an owned character token in this scene (or GM permissions).");
+ const selected=selectedTokenOrNull();
+ const assigned=actor?mine.find(t=>t.actor?.uuid===actor.uuid):null;
+ const first=(assigned??(selected&&mine.includes(selected)?selected:null)??mine[0]);
+ const partner=all.find(t=>t.id!==first.id);
+ if(!partner)return notify("Place at least two different character tokens in the scene.");
+ const target=selectedTargetOrNull();
+ const variants=templates();
+ const current=scopeDoc();
+ const state=ledgerOf(current);
+ const count=state.used[actorKey(first)]?.count??0;
+ const data=await D().input({
+   window:{title:"Averis Bound System"},ok:{label:"Send Bound request"},rejectClose:false,
+   content:`<div class="averis-bound-form">
+   <div class="averis-bound-info"><strong>⚔ Linked Fate</strong><div class="averis-bound-progress"><span>Encounter uses: ${count}/${cfg().usesPerEncounter}</span><span>Cooldown: ${cfg().cooldownRounds} rounds</span><span>One partner only once / encounter</span></div></div>
+   <label>Initiator<select name="tokenA">${optionsHtml(mine.map(t=>({id:t.id,name:t.name})),first.id)}</select></label>
+   <label>Partner<select name="tokenB">${optionsHtml(all.map(t=>({id:t.id,name:t.name})),partner.id)}</select></label>
+   <label>Bound action<select name="templateId">${optionsHtml(variants.map(v=>({id:v.id,name:`${v.title} — ${v.category}`})))}</select></label>
+   <label>Target (required for attacks/control)<select name="targetId"><option value="">No target</option>${optionsHtml(canvas.tokens.placeables.filter(t=>t.id!==first.id&&t.id!==partner.id).map(t=>({id:t.id,name:t.name})),target?.id??"")}</select></label>
+   <div class="averis-bound-info"><strong>Combined Actions:</strong> Melee, Ranged, Spell, Healing, Defense, Control, Skill Challenges, Movement and Support.<p class="averis-bound-note">All rolls, saving throws, spell slots and action costs remain native D&D 5e. A GM must approve the request and the partners' consent before Bound uses are spent.</p></div>
+   </div>`
+ });
+ const parsed=normalizedInput(data);if(!parsed)return;
+ const tokenA=safeId(parsed.tokenA),tokenB=safeId(parsed.tokenB),targetId=parsed.targetId?safeId(parsed.targetId):"";
+ const templateId=String(parsed.templateId??"");
+ if(!tokenA||!tokenB||!oneTemplate(templateId))return notify("Choose a valid pair and Bound action.");
+ const firstToken=canvas.tokens.get(tokenA);
+ if(!permissionToPropose(firstToken))return notify("You do not own the initiating character.");
+ const req={type:"proposal",requestId:foundry.utils.randomID(18),fromUserId:game.user.id,sceneId:activeScene().id,tokenA,tokenB,targetId,templateId};
+ if(isGMCoordinator())enqueue(()=>createBound(req));
+ else if(game.users.activeGM?.active){game.socket.emit(SOCKET,req);notify("Bound request sent to the active GM.","info");}
+ else notify("An active GM is required to approve Bound actions.","error");
+}
+function onSocket(message){
+ if(!message||typeof message!=="object"||!message.type)return;
+ if(message.type==="result"&&message.toUserId===game.user.id){ notify(message.ok?`GM approved ${message.title}.`:`Bound declined: ${message.title}`,message.ok?"info":"warn");return; }
+ if(message.type!=="proposal" || !isGMCoordinator())return;
+ if(!/^[a-zA-Z0-9_-]{10,32}$/.test(String(message.requestId??"")))return;
+ if(message.sceneId!==activeScene()?.id)return;
+ enqueue(async()=>{try{await createBound(message);}catch(error){game.socket?.emit(SOCKET,{type:"result",id:message.requestId,toUserId:message.fromUserId,ok:false,title:String(error?.message??error).slice(0,160)});throw error;}});
+}
+async function status(){
+ const doc=scopeDoc();if(!doc)return notify("Open a scene.");
+ const state=ledgerOf(doc),used=Object.entries(state.used);
+ const rows=used.length?used.map(([id,p])=>`<li><strong>${esc(getTokens().find(t=>actorKey(t)===id)?.name??"Actor")}</strong>: ${p.count}/${cfg().usesPerEncounter}; last round ${esc(p.lastRound??"out of combat")}; ${p.partners?.length??0} partner(s)</li>`).join(""):"<li>No Bound combinations yet.</li>";
+ const result=await D().confirm({window:{title:"Averis Bound — Encounter status"},content:`<div class="averis-bound-form"><p>Scope: ${esc(activeCombat()?"current combat":"current scene / downtime")}</p><ul>${rows}</ul><p>${state.entries.length} logged combinations.</p><p class="averis-bound-note">Reset removes only Bound uses/cooldowns/logs for this combat or scene. It does not restore spell slots or actions.</p></div>`,yes:{label:"GM: reset encounter Bound"},no:{label:"Close"},rejectClose:false});
+ if(!result)return;
+ if(!isGMCoordinator())return notify("Only the active GM can reset Bound uses.","error");
+ const again=await D().confirm({window:{title:"Confirm Bound reset"},content:"Reset all current encounter Bound uses and history? This cannot be undone.",yes:{label:"Reset all Bound uses"},no:{label:"Cancel"},rejectClose:false});
+ if(!again)return;
+ await doc.setFlag(MODULE_ID,"ledger",{version:1,revision:state.revision+1,used:{},entries:[]});
+ notify("Bound uses for this encounter were reset.","info");
+}
+async function customManager(){
+ if(!game.user.isGM)return notify("GM only.");
+ const custom=game.settings.get(MODULE_ID,"customTemplates")??[];
+ const intent=normalizedInput(await D().input({window:{title:"Averis Bound · Custom variants"},ok:{label:"Continue"},content:`<div class="averis-bound-form"><p>Built-in variants cannot be deleted. You can add your own non-scripted template or delete a custom one.</p><label>Operation<select name="operation"><option value="create">Create a variant</option><option value="delete">Delete a custom variant</option></select></label><label>Custom variant to delete<select name="target"><option value="">—</option>${optionsHtml(custom.map(t=>({id:t.id,name:t.title})))}</select></label></div>`}));
+ if(!intent)return;
+ if(intent.operation==="delete"){
+   if(!custom.some(x=>x.id===intent.target))return notify("Select a custom variant to delete.");
+   const yes=await D().confirm({window:{title:"Delete custom Bound"},content:`Delete ${esc(intent.target)}? Existing combat logs will retain its template ID.`,rejectClose:false});
+   if(yes)await game.settings.set(MODULE_ID,"customTemplates",custom.filter(x=>x.id!==intent.target));
+   return;
+ }
+ const form=normalizedInput(await D().input({window:{title:"Create custom Bound action"},ok:{label:"Save variant"},content:`<div class="averis-bound-form">
+ <label>Unique ID (lowercase, hyphens)<input name="id" value="custom-combo" required></label>
+ <label>Title<input name="title" value="New Bound Combo" required maxlength="64"></label>
+ <label>Category<select name="category">${optionsHtml(["custom","melee","ranged","spell","skill","support","healing","movement","control","defense"].map(v=>({id:v,name:v})))}</select></label>
+ <label>Action costs<input name="action" value="Action + Action" maxlength="80"></label>
+ <label>Reach (feet)<input name="reach" type="number" min="0" max="300" value="30"></label>
+ <label>Requires target?<select name="target"><option value="false">No</option><option value="true">Yes</option></select></label>
+ <label>Requires opposite sides?<select name="opposite"><option value="false">No</option><option value="true">Yes</option></select></label>
+ <label>Optional dice (blank or 1d6 etc.)<input name="formula" value=""></label>
+ <label>Bonus type<select name="bonusKind">${optionsHtml(["check","damage","healing","temp","penalty"].map(v=>({id:v,name:v})))}</select></label>
+ <label>Trigger condition<input name="trigger" value="Both participants complete their actions" maxlength="300"></label>
+ <label>D&D mechanics & adjudication<textarea name="rules" rows="5" required>Both participants take their normal actions. The GM adjudicates effects with D&D 5e rules.</textarea></label>
+ </div>`}));
+ if(!form)return;
+ try{
+   const entry=normalizeTemplate({...form,target:form.target==="true",opposite:form.opposite==="true"});
+   if(templates().some(x=>x.id===entry.id))throw Error("A Bound variant already has this ID.");
+   await game.settings.set(MODULE_ID,"customTemplates",[...custom,entry]);
+   notify(`Added custom Bound variant: ${entry.title}`,"info");
+ }catch(e){cleanError(e);}
+}
+async function onChat(message,html){
+ if(!game.user.isGM)return;
+ const root=html?.[0]??html;
+ if(!root?.querySelectorAll)return;
+ for(const btn of root.querySelectorAll("[data-averis-bound-resolve]")){
+   if(btn.dataset.averisBoundReady)return;
+   btn.dataset.averisBoundReady="1";
+   btn.addEventListener("click",()=>enqueue(async()=>{
+     const id=btn.dataset.averisBoundResolve;
+     const scopeUuid=message.getFlag(MODULE_ID,"scopeUuid");
+     await resolveById(id,scopeUuid);
+   }));
+ }
+}
+Hooks.once("init",()=>{
+ game.settings.register(MODULE_ID,"usesPerEncounter",{name:"Uses per character / encounter",hint:"Both participants consume one use of their own pool.",scope:"world",config:true,type:Number,range:{min:1,max:10,step:1},default:2});
+ game.settings.register(MODULE_ID,"cooldownRounds",{name:"Cooldown in combat rounds",hint:"Three rounds means use on round 1, next use on round 4.",scope:"world",config:true,type:Number,range:{min:0,max:20,step:1},default:3});
+ game.settings.register(MODULE_ID,"preventRepeat",{name:"Do not repeat the same partner",scope:"world",config:true,type:Boolean,default:true});
+ game.settings.register(MODULE_ID,"requireOpposite",{name:"Opposite-side placement for attack modes",scope:"world",config:true,type:Boolean,default:true});
+ game.settings.register(MODULE_ID,"allowOutOfCombat",{name:"Allow scene/downtime Bound actions",scope:"world",config:true,type:Boolean,default:true});
+ game.settings.register(MODULE_ID,"customTemplates",{name:"Custom Bound variants",scope:"world",config:false,type:Array,default:[]});
+ game.settings.registerMenu(MODULE_ID,"manager",{name:"Create / delete Bound variants",label:"Manage Bound variants",hint:"Create your own combinations using D&D 5e narrative rules and optional bonus dice.",icon:"fas fa-people-arrows-left-right",type:class extends foundry.applications.api.ApplicationV2{render(...args){void customManager();return this;}},restricted:true});
+ game.keybindings.register(MODULE_ID,"open",{name:"Open Averis Bound System",hint:"Propose a combination with another character",editable:[{key:"KeyB",modifiers:["ALT"]}],onDown:()=>{void open();return true;},restricted:false});
+ game.modules.get(MODULE_ID).api={open,status,customManager,getVariants:()=>templates(),getLedger:()=>ledgerOf(scopeDoc())};
 });
-Hooks.once('ready',async()=>{
- if(game.system.id!=='dnd5e'){alert('warn','Averis Skill Tree requires the D&D 5e game system.');return;}
- if(game.user.isGM&&game.settings.get(MOD,'dataVersion')<2){
-   try{
-     const old=trees();const fresh=mergeWorldTrees(old);
-     await game.settings.set(MOD,'trees',fresh);
-     await game.settings.set(MOD,'dataVersion',2);
-     console.info(`${MOD} | upgraded world trees to v0.2.0 (${fresh.length} trees)`);
-   }catch(error){console.error(`${MOD} | migration`,error);alert('error','Skill Tree migration failed. Make a world backup and inspect the console.');}
- }
- Hooks.on('renderApplicationV2',(app,el)=>{
-   if(game.settings.get(MOD,'showSheetButton'))addSheetButton(app,el);
- });
- Hooks.on('renderActorSheet',(app,html)=>{
-   if(!game.settings.get(MOD,'showSheetButton'))return;
-   const el=html instanceof HTMLElement?html:html?.[0];if(el)addSheetButton(app,el);
- });
- console.info(`${MOD} | v0.2.0 for Foundry V14 + dnd5e 5.3.3 ready`);
+Hooks.once("ready",()=>{
+ if(game.system.id!=="dnd5e")notify("Averis Bound System was designed for the D&D 5e system.","error");
+ game.socket?.on(SOCKET,onSocket);
+ log("Ready for Foundry V14 / dnd5e 5.3.3");
+});
+Hooks.on("getHeaderControlsApplicationV2",(app,controls)=>{
+ const actor=app.actor??app.document;
+ if(actor?.documentName!=="Actor"||actor.type!=="character")return;
+ if(!game.user.isGM&&!actor.isOwner)return;
+ if(controls.some(c=>c.action==="averisBoundOpen"))return;
+ controls.unshift({action:"averisBoundOpen",label:"Bound",icon:"fa-solid fa-people-arrows-left-right",visible:true,onClick:()=>void open({actor})});
+});
+Hooks.on("renderChatMessage",(message,html)=>{void onChat(message,html);});
+// Reliable fallback for sheets that replace V14 header menus.
+Hooks.on("renderApplicationV2",(app,html)=>{
+ const actor=app.actor??app.document;if(actor?.documentName!=="Actor"||actor.type!=="character")return;
+ if(!game.user.isGM&&!actor.isOwner)return;
+ if(!html?.querySelector)return;
+ const header=html.querySelector("header.window-header");if(html.querySelector(".averis-bound-header"))return;
+ const button=document.createElement("button");button.type="button";button.className="averis-bound-header";button.title="Open Averis Bound";button.innerHTML='<i class="fas fa-link"></i> Bound';
+ button.addEventListener("click",e=>{e.preventDefault();void open({actor});});
+ if(header){const anchor=header.querySelector(".window-title");if(anchor)anchor.after(button);else header.append(button);}else {const slot=html.querySelector(".sheet-body, .tab-body, form, .sheet-content, section")??html;slot.prepend(button);}
 });

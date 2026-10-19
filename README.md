@@ -1,62 +1,80 @@
-# Averis Skill Tree — Foundry V14 / D&D 5e 5.3.3 (v0.2.0)
+# Averis Bound System — Foundry VTT 14 / dnd5e 5.3.3
 
-Custom campaign skill progression: a character gains **one independent Skill Point on each Skill Level** and spends it on abilities from General, Class, and assigned Affinity trees. These are additional **Averis homebrew** progression perks, not a replacement for normal D&D 5e advancement. No GM creation of every ability or Item UUID is required.
+**Playtest v0.1.0** · independent Foundry module, no dependencies on Midi-QOL, DAE, Sequencer or any other third-party modules.
 
-## Install or update via Manifest URL
+Averis Bound is a 2-character cooperative system for **more than just attacks**. It works alongside normal D&D 5e checks, Activities, spellcasting, reactions and conditions; it does not override the system's action economy or automate casting on another player's behalf.
 
-In **Foundry Setup → Add-on Modules → Install Module**, paste:
+## How to install
 
-```
-https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json
-```
+**Manifest URL (GitHub):**
 
-The trailing `.` in the repository name is intentional. Users upgrading from v0.1.0 can choose **Check Update**, then activate the new version. Back up the Foundry **world** before updating: the module migrates world-wide tree definitions when a GM logs in.
-
-## What's new in v0.2.0
-
-- Fixed `DialogV2.input` plain-object input parsing (XP, bonus points, editing, Affinity assignment).
-- Fixed Affinity checkboxes, which now have unique form names, including `No Mana` (no Affinity selected).
-- Fixed narrow toolbar/delete buttons and protected preconfigured system trees from accidental deletion.
-- **31 built-in trees**, **159 nodes**: four General trees (all 18 dnd5e skills, adventure combat talents), unique 5-ability trees for 13 D&D 5e classes, and all 14 Averis Affinities with five tiers each.
-- Abilities no longer need GM-linked World/Compendium Items: the module creates native D&D 5e Features and Spells directly on the Actor; skill proficiency/expertise and passive bonuses use Active Effects. Class attacks with stated numeric damage have native Attack Activities. Missing exact Affinity attack/DC data is **not invented**: the Item is a clickable Utility Activity with the canonical description and GM adjudication.
-- XP grants **+1 Skill Point per Skill Level** (starts with 1 point at Level 1), independent from class levels. Formula: `100 × current Skill Level` XP for next Skill Level. Negative XP changes current unspent XP only; already spent points never become invalid.
-- Better safety: no missing linked Item can consume points, per-window purchase lock, rollback of newly created Items/Effects if saving Actor progress fails, prohibit removing an Affinity with invested skills, and protect a character's unrelated Items/Effects during Reset.
-- Migrates v0.1.0 world settings once. Keeps custom trees/custom nodes and invested legacy trees when required rather than discarding saved purchases.
-
-## How players use it
-
-1. Open a Character Sheet and click **Skill Tree**. Every character sees General trees and the tree for each class Item actually present on their sheet.
-2. The GM clicks **Assign Affinities** to select Fire, Water, Earth, Wind, Lightning, Ice, Thunder, Acid, Poison, Necrotic, Psychic, Radiant, Force, or Blood.
-3. The GM clicks **+ XP** to award independent Skill XP. On each Skill Level increase the hero automatically gains one spendable point.
-4. Click **UNLOCK / UPGRADE** on an available node. The Actor gets the native skill/effect/item and the Skill Point is deducted once.
-5. For unlocked spells and class ability Items, open the sheet's native Spells/Features area. Click the small book icon in the tree to open the Item itself. Normal D&D 5e features and advancements remain unchanged.
-
-## Exact mechanics and limitations
-
-- Built-in **General skills** provide standard proficiency and expertise via Active Effects (Rank 1 / 2); passive bonuses use dnd5e Active Effect paths.
-- Unique **Class talents** are explicitly labelled extra Averis homebrew abilities, not copied SRD class advancement features (avoids duplication with Rage, Extra Attack, Lay on Hands, etc). Their descriptions specify action economy/usage and often saves or damage where provided.
-- **Affinity names** were restored from previously discussed Averis canon. Fire, Water, Earth, Wind, Lightning, Ice, Acid, Poison, Necrotic, Psychic, Radiant, Force, Blood have their named tier skills. Canonical Thunder tier 2–5 descriptions were not previously recorded and are labelled **Unspecified**, rather than inventing them. Some Affinity damage/DC/uses are likewise unspecified: the automatic native Item serves as a tracked D&D feature, while the GM handles effects manually until those values are configured.
-- D&D `system.activities` support depends on the installed dnd5e build. If a build rejects generated Activities, the module retries with a plain native Item and warns the GM. This fails safe (keeps a usable Feature/Spell description but no automated attack). Do not expect all non-numeric Affinity attacks, buffs, temporary areas, conditions, or summoning to run automatically without custom Activities/Midi-QOL configuration.
-- A `1/Long Rest` Item **may still require configuration/checking** of consumption and recovery in a specific installed dnd5e system version. Confirm once on a test character.
-- No simultaneous multi-client transaction arbitration. Only one owner should spend points for a character at a time.
-- This release is **code-reviewed and tested with a Node-based mocked Foundry harness**, not yet runtime-tested inside your actual Foundry V14/5.3.3 installation. Back up first and confirm the live UI as a GM and a player.
-
-## GM customization
-
-The module includes a GM-only tree/node editor for optional personal rules. To add custom attacks/spells with precise dice and DC, you can link a complete native D&D Item UUID as before. The 159 preloaded nodes do not need you to do that.
-
-## Developer testing
-
-```bash
-node --check scripts/main.js
-node --check scripts/data.js
-node tests/smoke.mjs
+```text
+https://raw.githubusercontent.com/Daikaze/Averis-Skill-Tree./averis-bound-system/module.json
 ```
 
-## Source and updates
+In **Foundry Setup → Add-on Modules → Install Module**, paste the URL into **Manifest URL** and click Install. Start the world and enable *Averis Bound System* in Manage Modules.
 
-GitHub: https://github.com/Daikaze/Averis-Skill-Tree.
+**Important GitHub organization:** The module is temporarily hosted in a *dedicated branch* (`averis-bound-system`) of your existing `Daikaze/Averis-Skill-Tree.` repository because the connected GitHub integration cannot create repositories. The default `main` branch and the Skill Tree manifest/release are left untouched. A dedicated `Daikaze/Averis-Bound-System` repository would be preferable later.
 
-Manifest: https://github.com/Daikaze/Averis-Skill-Tree./releases/latest/download/module.json
+For manual install, extract the release zip into the Foundry User Data directory's `Data/modules/averis-bound-system/` so `module.json` is directly inside this folder. Always back up the world first.
 
-Release assets are produced by GitHub Actions. Update checking in Foundry will follow new published releases.
+## Nine cooperative variants
+
+| Variant | Category | Action requirements | Combined benefit (GM adjudicated) |
+|---|---|---|---|
+| Twin Strike | Melee | Action + Action | Both melee attacks land → roll 1d6 extra Force damage |
+| Crossfire | Ranged | Action + Action | Both ranged attacks land → roll 1d6 shared damage |
+| Spell Weave | Spells | Cast normal spells / spend normal slots | Both spells affect one target → 1d6 extra Force damage |
+| Healing Chorus | Healing | Normal healing actions/spells | Both heal an ally → 1d6 extra healing |
+| Guardian Link | Defense | Reaction + Reaction | +2 AC vs one attack (GM temporarily adjudicates) |
+| Tactical Feint | Control | Action + Reaction | Failed normal Wisdom save → -1d4 to target's next attack |
+| Skill Synergy | Skill checks | Action + Action (or downtime) | Two successful checks → +1d4 one follow-up check |
+| Evasive Relay | Movement | Reaction + Reaction | Two allies each move up to 10 ft, subject to standard movement rules |
+| Rallying Call | Support | Bonus Action + Bonus Action | Give one ally 1d4 temporary HP (non-stacking) |
+
+All numeric benefits are **playtest proposals**, not preexisting Averis canon. The GM can create different custom modes using **Manage Bound variants** in Module Settings. The core module never deals extra damage or edits HP/AC automatically; shared dice are rolled **once** after the GM clicks the chat card button. The GM applies the benefit manually according to the situation.
+
+## Averis Bound restrictions
+
+- 2 Bound uses **per character** in each encounter (both participants spend 1).
+- **3 complete round numbers** between uses for each participant, so a use on Round 1 permits their next use at Round 4.
+- No repeating the same partner in one encounter.
+- Melee and ranged attack modes require both participants to use the same attack style; this is declared by mode and manually confirmed by GM. No automatic item-type guesswork.
+- Attack modes can require characters to stand on **opposite sides** of the target, using token positions and an angle tolerance, and be within appropriate maximum reach.
+- Special Averis exhaustion exception: ignore exhaustion level 1–2 penalties **for the Bound maneuver only**. The module does **not** remove exhaustion statuses or change D&D 5e's normal exhaustion handling outside Bound.
+- During combat, both characters must be in the active combat on the current scene and conscious. Out of combat, Bound is tracked **per scene** and uses reset only using the GM Reset Encounter action. No round-based cooldown outside combat.
+- Targeting does not infer allegiance, line of sight, magic components, weapon reach or real remaining spell slots: GM confirms these. D&D 5e items and activities handle the actual attacks, spell slots and rolls.
+
+## Using it
+
+1. Place two PC Character tokens on the same scene. They must be different characters. Start combat if you're using Bound in combat.
+2. **Alt+B** or **Bound** on a Character Sheet or this macro:
+   ```js
+   game.modules.get("averis-bound-system").api.open();
+   ```
+3. Select initiator, partner, variant and a target if relevant.
+4. The active GM receives a confirmation dialog. Ask both participants if they agree, check action/spell/reaction availability, and approve.
+5. Both users roll their normal D&D attacks, checks or spell Activities; any shared bonus is rolled by the GM once from the resulting chat card after success conditions are met.
+6. **For GM status and reset** use:
+   ```js
+   game.modules.get("averis-bound-system").api.status();
+   ```
+7. Custom variants: **Game Settings → Configure Settings → Module Settings → Averis Bound System → Manage Bound variants**.
+
+## Anti-bug measures and known boundaries
+
+- One active GM processes and writes all Bound actions in a serialized queue, so two players cannot spend the same use simultaneously through this module.
+- Requests must receive GM confirmation; the module never modifies protected encounter resources on a player's unauthorised request.
+- It reads current positions, initiative, uses and round **again after** the GM finishes approving, to prevent stale requests.
+- Encounter state is stored once on the Combat Document; out-of-combat state is on the Scene Document. Scene and combat states remain separate. No token/actor HP or effect edits.
+- Unique request IDs block duplicate accepted actions; chat shared bonus rolls have a one-time ledger flag.
+- The GM sees the claimed requester name but direct Foundry sockets do not provide authenticated sender identity; **GM approval is the security boundary**. Only run this module with trusted players.
+- Spell slots, concentration, ammunition, action / bonus action / reaction use, LOS, immunities and native dnd5e Activities are always handled by the players' standard sheets and the GM. This is not a Midi-QOL replacement and does not automatically subtract HP.
+- Never reset mid-combat unless intentionally restoring all Bound uses. Undo/refund is not built into v0.1.0.
+- No live integration test was possible inside your local Foundry V14 game. Always make a backup and test in a copy of Averis first.
+
+## Compatibility and tests
+
+- Declared Foundry **14 only**, dnd5e **5.3.3 only**. The module uses V14 `DialogV2`, `getHeaderControlsApplicationV2`, module sockets, and native Combat/Scene document flags.
+- `node --test tests/rules.test.mjs` runs tests of usage limits, cooldown, repetition, position geometry, duplicate IDs, one-time shared bonus and out-of-combat ledger behavior.
+- `node --check scripts/main.js` checks syntax. These tests cannot substitute for actual V14 UI testing.

@@ -1,0 +1,53 @@
+name: Build and publish Averis Bound module
+on:
+  push:
+    branches: [averis-bound-system]
+    paths:
+      - module.json
+      - 'scripts/**'
+      - 'tests/**'
+      - '.github/workflows/bound-release.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run syntax and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check scripts/main.js
+          node --check scripts/rules.mjs
+          node --test tests/*.test.mjs
+      - name: Verify Foundry V14 manifest and package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          m=json.load(open('module.json'))
+          assert m['id']=='averis-bound-system'
+          assert m['version']=='0.1.0'
+          assert m['compatibility']['minimum']=='14'
+          assert m['relationships']['systems'][0]['id']=='dnd5e'
+          assert m['relationships']['systems'][0]['compatibility']['minimum']=='5.3.3'
+          PY
+          zip -q -r averis-bound-system-v0.1.0.zip module.json scripts styles assets README.md START_HERE_BG.md
+          unzip -t averis-bound-system-v0.1.0.zip
+      - name: Publish tagged release WITHOUT changing Skill Tree latest release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view bound-v0.1.0 >/dev/null 2>&1; then
+            echo 'Bound release already exists, refusing to overwrite an immutable tag' >&2
+            exit 1
+          fi
+          gh release create bound-v0.1.0 averis-bound-system-v0.1.0.zip --title 'Averis Bound System v0.1.0' --notes 'Playtest release, Foundry VTT 14 + dnd5e 5.3.3. Nine cooperative actions, GM approval, per-encounter ledger, validated cooldown and encounter usage. Read README before live play.' --latest=false

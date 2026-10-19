@@ -1,0 +1,14 @@
+.averis-bound-form { display:grid; gap:10px; max-height: 70vh; overflow:auto; padding:6px; min-width:min(520px,75vw); }
+.averis-bound-form label { display:flex; flex-direction:column; gap:4px; font-weight:650; }
+.averis-bound-form select,.averis-bound-form input,.averis-bound-form textarea { width:100%; box-sizing:border-box; padding:7px; border-radius:6px; }
+.averis-bound-info { padding:10px; border-radius:9px; background:var(--color-bg-option,rgba(100,96,140,.12)); line-height:1.5; }
+.averis-bound-note { font-size: .85em; opacity: .88; }
+.averis-bound-progress { display:flex; flex-wrap:wrap; gap:8px; }
+.averis-bound-progress > span { border:1px solid var(--color-border-light-2,#999); border-radius:7px; padding:4px 8px; font-size:.9em; }
+.averis-bound-badge { font-weight:bold; color:#b484ed; }
+.averis-bound-chat { padding:8px 4px; display:grid; gap:6px; }
+.averis-bound-chat h3 { margin:0; }
+.averis-bound-chat .bound-pills { display:flex;flex-wrap:wrap;gap:5px; }
+.averis-bound-chat .bound-pills span { border:1px solid currentColor; border-radius:10px; padding:3px 6px;font-size:.82em; }
+.averis-bound-chat button { min-height:32px; }
+.averis-bound-header .fas { color:#a88bea; }
