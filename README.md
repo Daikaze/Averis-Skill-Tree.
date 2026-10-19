@@ -1,5 +1,14 @@
 # Averis Bound System — Linked Fate v0.2.2
 
+## v0.2.3 — 5-ft range fix (Foundry V14)
+
+- Bound reach now measures **occupied token grid cells**, not token center-to-center Euclidean distance. Diagonal adjacency is treated as a 5-ft melee neighbor; Large or larger creatures use their nearest occupied grid cells.
+- For distance beyond adjacent cells, Foundry V14's scene-native grid measurement is used; gridless scenes use edge-to-edge distance.
+- The dashboard checks distance and opposite-side positioning **before** submitting, with readable per-participant range diagnostics.
+- A technique that requires flanking **still** needs heroes on opposite sides of the target; being within 5 ft alone does not satisfy that separate requirement.
+- Added geometry regression tests for horizontal, vertical, diagonal, different token sizes, out-of-range positions, scene scale, and gridless/hex behavior.
+
+
 **Target:** Foundry VTT **V14** / **D&D 5e 5.3.3**. Custom optional homebrew system; does not modify ordinary class progression, Midi-QOL, casting or turn economy.
 
 ## v0.2.2 visual hotfix (Foundry V14 / dnd5e 5.3.3)
