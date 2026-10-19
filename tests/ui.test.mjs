@@ -27,10 +27,10 @@ test('tabs are accessible and native dropdown choices have readable contrast',()
   assert.match(css,/\.averis-bound-form option,/);
 });
 
-test('updated manifest points to the v0.2.2 isolated Bound release',()=>{
-  assert.equal(manifest.version,'0.2.2');
+test('manifest uses its current semantic version in the isolated Bound release URL',()=>{
+  assert.match(manifest.version,/^\d+\.\d+\.\d+$/);
   assert.equal(manifest.id,'averis-bound-system');
-  assert.ok(manifest.download.includes('/bound-v0.2.2/'));
+  assert.ok(manifest.download.includes(`/bound-v${manifest.version}/`));
   assert.equal(manifest.compatibility.verified,'14');
   assert.equal(manifest.relationships.systems[0].compatibility.minimum,'5.3.3');
 });
