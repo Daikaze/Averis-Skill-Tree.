@@ -1,4 +1,4 @@
-# Averis Bound System — Linked Fate v0.2.0
+# Averis Bound System — Linked Fate v0.2.1
 
 **Target:** Foundry VTT **V14** / **D&D 5e 5.3.3**. Custom optional homebrew system; does not modify ordinary class progression, Midi-QOL, casting or turn economy.
 
@@ -10,7 +10,7 @@ Open Foundry Setup → **Add-on Modules → Install Module → Manifest URL**, p
 https://raw.githubusercontent.com/Daikaze/Averis-Skill-Tree./averis-bound-system/module.json
 ```
 
-This is deliberately published in the **`averis-bound-system`** branch of the existing **`Daikaze/Averis-Skill-Tree.`** repository (the trailing dot is part of its name). It does not replace the Skill Tree module. The Bound release is tagged `bound-v0.2.0` so that the Skill Tree's independent releases remain unaffected.
+This is deliberately published in the **`averis-bound-system`** branch of the existing **`Daikaze/Averis-Skill-Tree.`** repository (the trailing dot is part of its name). It does not replace the Skill Tree module. The Bound release is tagged `bound-v0.2.1` so that the Skill Tree's independent releases remain unaffected.
 
 Make a **backup of your world** first. Updating from v0.1.0 retains old Bound encounter/scene ledgers and custom templates. It adds new actor progression flags non-destructively. No previous items, combat records, or custom presets are reset.
 

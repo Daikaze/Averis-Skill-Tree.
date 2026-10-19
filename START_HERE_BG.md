@@ -1,4 +1,4 @@
-# Averis Bound System v0.2.0 — инструкция
+# Averis Bound System v0.2.1 — инструкция
 
 ## Важни неща
 
