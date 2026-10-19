@@ -4,6 +4,7 @@ import {
  MODULE_ID, PRESETS, DEFAULT_CONFIG, normalizeTemplate, normalizeLedger,
  failureReason, commitBound, resolveBonus, oppositeSides, distanceFeet
 } from "./rules.mjs";
+import {tokenReachFeet} from "./geometry.mjs";
 
 const SOCKET = `module.${MODULE_ID}`;
 const log = (...args) => console.log(`[Averis Bound]`, ...args);
@@ -34,7 +35,7 @@ function getTokens(){return (canvas?.tokens?.placeables??[]).filter(t=>t.actor?.
 function permissionToPropose(t){return game.user.isGM || !!t?.actor?.testUserPermission?.(game.user,"OWNER");}
 function editablePairTokens(){return getTokens().filter(t=>t.actor?.isOwner||game.user.isGM);}
 function center(t) {return t.center??{x:(t.document.x??0)+t.w/2,y:(t.document.y??0)+t.h/2};}
-function feet(a,b) {return distanceFeet(center(a),center(b),canvas?.dimensions?.size,canvas?.dimensions?.distance);}
+function feet(a,b) {return tokenReachFeet(a,b,canvas?.grid,canvas?.dimensions?.size,canvas?.dimensions?.distance);}
 function selectedTokenOrNull() {return canvas.tokens?.controlled?.find(t=>t.actor?.type==="character")??null;}
 function selectedTargetOrNull(){return [...(game.user.targets??[])].find(t=>t.scene?.id===activeScene()?.id)??null;}
 function ledgerOf(doc){return normalizeLedger(doc?.getFlag(MODULE_ID,"ledger"));}
@@ -52,6 +53,23 @@ function cleanError(err) {const msg=String(err?.message??err??"Unexpected error"
 function addSeen(id){seen.add(id);if(seen.size>MAX_REQUESTS)seen.delete(seen.values().next().value);}
 function enqueue(job){gmQueue=gmQueue.catch(()=>{}).then(job).catch(cleanError);return gmQueue;}
 function confirmedMode(t){return t.category==="melee"||t.category==="ranged"||t.category==="spell";}
+
+function reachProblem(template,t1,t2,target){
+ if(!template||!t1||!t2||!(template.reach>0))return null;
+ const limit=template.reach+0.01;
+ if(target&&confirmedMode(template)){
+   const a=feet(t1,target),b=feet(t2,target);
+   if(a>limit||b>limit){
+     const fmt=n=>Number.isFinite(n)?Number(n.toFixed(1)):"unknown";
+     return `Both allies must be within ${template.reach} ft of ${target.name}. Actual: ${t1.name} ${fmt(a)} ft; ${t2.name} ${fmt(b)} ft.`;
+   }
+ }
+ if(!target&&!confirmedMode(template)){
+   const d=feet(t1,t2);
+   if(d>limit)return `This Bound requires allies within ${template.reach} ft of each other (currently ${Number.isFinite(d)?Number(d.toFixed(1)):"unknown"} ft).`;
+ }
+ return null;
+}
 function checkAlive(t){
  const hp=t.actor?.system?.attributes?.hp?.value;
  const condition=t.actor?.statuses;
@@ -74,10 +92,8 @@ function validate(req,{strict=true}={}) {
  const target=req.targetId?canvas.tokens.get(req.targetId):null;
  if(template.target && (!target||target.id===t1.id||target.id===t2.id))throw Error("This variant needs a different target token.");
  if(target && !checkAlive(target) && confirmedMode(template))throw Error("The selected target is already down.");
- if(target && template.reach>0 && confirmedMode(template)){
-   if(feet(t1,target)>template.reach+0.01 || feet(t2,target)>template.reach+0.01)throw Error(`Both allies must be within ${template.reach} ft of the target.`);
- }
- if(!target && template.reach>0 && !confirmedMode(template) && feet(t1,t2)>template.reach+0.01)throw Error(`This Bound requires allies within ${template.reach} ft of each other.`);
+ const reachError=reachProblem(template,t1,t2,target);
+ if(reachError)throw Error(reachError);
  if(target && template.opposite && cfg().requireOpposite && !oppositeSides(center(t1),center(t2),center(target))) throw Error("Allies must stand on opposite sides of the target (flanking formation).");
  const doc=scopeDoc();if(!doc)throw Error("There is no encounter or scene to track Bound uses.");
  const round=combat?.round??null;
@@ -194,7 +210,13 @@ class BoundDashboard extends foundry.applications.api.ApplicationV2 {
  <div class="ab-card-top"><span class="ab-icon"><i class="fas ${esc(t.icon)}"></i></span><span class="ab-tier">T${esc(t.tier??1)}</span></div>
  <div class="ab-card-name" title="${esc(t.title)}">${esc(t.title)}</div><div class="ab-card-sub">${esc(GROUP_NAMES[t.category]??t.category)}</div>
  <div class="ab-card-meta"><span><i class="fas fa-layer-group"></i> Lv ${esc(t.level??1)}</span>${locked?'<span class="ab-locked"><i class="fas fa-lock"></i> Locked</span>':'<span class="ab-ready"><i class="fas fa-unlock"></i> Ready</span>'}</div></button>`;}).join('');
- const reason=selected?(unlockReason(selected,p,pairCount)||unlockReason(selected,q,pairCount)):'No action selected';const missingTarget=!!selected?.target&&!target;const ready=!reason&&!missingTarget&&first&&partner&&remaining>0;
+ const reason=selected?(unlockReason(selected,p,pairCount)||unlockReason(selected,q,pairCount)):'No action selected';const missingTarget=!!selected?.target&&!target;
+  const positionError=first&&partner&&!missingTarget
+    ? reachProblem(selected,first,partner,target)
+      || (target&&selected?.opposite&&cfg().requireOpposite&&!oppositeSides(center(first),center(partner),center(target))
+        ? 'Opposite-side positioning required for this Bound.' : null)
+    : null;
+  const ready=!reason&&!missingTarget&&!positionError&&first&&partner&&remaining>0;
  const history=ledger.entries.slice(-12).reverse().map(e=>`<div class="ab-history-row"><div><b>${esc(oneTemplate(e.templateId)?.title??e.templateId)}</b><small>${esc((tks.find(t=>actorKey(t)===e.actorA)?.name??'Hero')+' + '+(tks.find(t=>actorKey(t)===e.actorB)?.name??'Hero'))}</small></div><span>${e.round?'Round '+esc(e.round):'Exploration'}</span></div>`).join('')||'<div class="ab-empty">No Bound actions have been performed yet.</div>';
  const side=`<div class="ab-panel-head"><span><i class="fas fa-users"></i> PARTICIPANTS</span></div><div class="ab-partners"><label>Initiator<select aria-label="Initiator" data-field="tokenA" ${owned.length===0?'disabled':''}>${allTokensOption(owned,this.tokenA)}</select></label><label>Partner<select aria-label="Partner" data-field="tokenB">${allTokensOption(tks.filter(t=>t.id!==this.tokenA),this.tokenB)}</select></label><label>Target<select aria-label="Target" data-field="targetId"><option value="">No target</option>${allTokensOption((canvas?.tokens?.placeables??[]).filter(t=>t.id!==this.tokenA&&t.id!==this.tokenB),this.targetId)}</select></label></div>
  <div class="ab-divider"></div><div class="ab-panel-head"><span><i class="fas fa-chart-line"></i> PROGRESSION</span></div>
@@ -213,7 +235,7 @@ class BoundDashboard extends foundry.applications.api.ApplicationV2 {
  const main=`<div class="ab-main-header"><div><div class="ab-overline">TOME OF PAIRED ARTS</div><h2>Bound Techniques <span>${all.length}</span></h2><p>Cooperative abilities · unlock through progression</p></div><div class="ab-main-badges"><span><i class="fas fa-shield-alt"></i> GM approval</span><span><i class="fas fa-dice-d20"></i> D&D 5e</span></div></div>
  <div class="ab-tab-row"><button type="button" data-a="tab" data-id="library" class="${this.view==='library'?'active':''}"><i class="fas fa-layer-group"></i> Library</button><button type="button" data-a="tab" data-id="progress" class="${this.view==='progress'?'active':''}"><i class="fas fa-seedling"></i> Progression</button><button type="button" data-a="tab" data-id="history" class="${this.view==='history'?'active':''}"><i class="fas fa-scroll"></i> History</button><button type="button" data-a="tab" data-id="details" class="${this.view==='details'?'active':''}"><i class="fas fa-book-open"></i> Details</button></div>
  ${this.view==='library'?`<div class="ab-catalog-top"><input type="search" class="ab-search" placeholder="Search techniques or effects..." value="${esc(this.search)}" aria-label="Search combos"><label class="ab-checkbox"><input type="checkbox" data-field="lockedOnly" ${this.lockedOnly?'checked':''}> Locked only</label></div>${categories}<div class="ab-scroll ab-catalog-scroll"><div class="ab-grid">${cards}</div><div class="ab-empty ab-none" hidden>No matching techniques.</div></div>`:this.view==='progress'?`<div class="ab-scroll ab-progress"><h3>Bound progression</h3><p>Each hero gains Bound XP after an approved combination (${game.settings.get(MODULE_ID,'xpPerBound')??XP_ON_BOUND} XP), or through a GM award. New techniques unlock automatically based on individual Bound Level and the pair's Bond Rank.</p><div class="ab-milestones">${[1,3,5,7,9,12,15,20].map(level=>`<div class="${p.level>=level?'done':''}"><strong>Level ${level}</strong><span>${level<=12?'New techniques · Tier '+([1,3,5,7,9,12].indexOf(level)+1):'Veteran status'}</span><small>${totalXpForLevel(level)} total XP</small></div>`).join('')}</div><h3>Bond Rank — ${esc(partner?.name??'Partner')}</h3><p>Rank 1: 0–2 paired actions · Rank 2: 3–5 · Rank 3: 6–9 · Rank 4: 10+</p>${game.user.isGM?'<button class="ab-small-btn" data-a="addxp">GM: Grant XP</button>':''}</div>`:this.view==='details'?`<div class="ab-scroll ab-detail-in-main">${detail}</div>`:`<div class="ab-scroll ab-history">${history}</div>`}`;
- const footer=`<div class="ab-footer"><div class="ab-footer-text">${selected?esc(selected.title):'Choose a Bound action'} ${reason?`· ${esc(reason)}`:missingTarget?'· Select a target':'· Ready to request'}</div><button type="button" class="ab-action-btn" data-a="submit" ${ready?'':'disabled'}><i class="fas fa-bolt"></i> ${ready?'Request Bound':reason?'Technique locked':missingTarget?'Select a target':'No uses or partner'}</button></div>`;
+ const footer=`<div class="ab-footer"><div class="ab-footer-text">${selected?esc(selected.title):'Choose a Bound action'} ${reason?`· ${esc(reason)}`:missingTarget?'· Select a target':positionError?`· ${esc(positionError)}`:'· Ready to request'}</div><button type="button" class="ab-action-btn" data-a="submit" ${ready?'':'disabled'}><i class="fas fa-bolt"></i> ${ready?'Request Bound':reason?'Technique locked':missingTarget?'Select a target':positionError?'Adjust positions':'No uses or partner'}</button></div>`;
  const el=document.createElement('section');el.className='ab-shell';el.innerHTML=`<aside class="ab-left ab-scroll">${side}</aside><main class="ab-main">${main}${footer}</main><aside class="ab-right ab-scroll"><div class="ab-detail-header"><span>DETAILS</span>${selected?`<button class="ab-favorite" data-a="favorite" data-id="${esc(selected.id)}" title="Toggle favorite"><i class="${favorite(selected.id)?'fas':'far'} fa-star"></i></button>`:''}</div>${detail}</aside>`;
  return el;
  }
