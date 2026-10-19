@@ -1,20 +1,11 @@
-/** Pure, version-agnostic Bound rules. No Foundry globals or side effects. */
-export const MODULE_ID = "averis-bound-system";
-export const VERSION = 1;
-export const PRESETS = Object.freeze([
-  { id:"twin-strike", title:"Twin Strike", category:"melee", icon:"fa-swords", action:"Action + Action", target:true, opposite:true, reach:5, formula:"1d6", bonusKind:"damage", trigger:"Both melee attacks hit the same creature", rules:"Both participants spend their normal Actions and roll their own melee attacks through D&D 5e. If both hit the chosen target, the GM may resolve one extra 1d6 Force damage. Damage is never auto-applied." },
-  { id:"crossfire", title:"Crossfire", category:"ranged", icon:"fa-bullseye", action:"Action + Action", target:true, opposite:true, reach:120, formula:"1d6", bonusKind:"damage", trigger:"Both ranged attacks hit the same creature", rules:"Both participants make separate ranged attacks with appropriate weapons. On two hits, GM may roll one extra 1d6 damage. Respect normal ammunition, cover and disadvantage." },
-  { id:"spell-weave", title:"Spell Weave", category:"spell", icon:"fa-wand-magic-sparkles", action:"Normal spell casting for both participants", target:true, opposite:false, reach:120, formula:"1d6", bonusKind:"damage", trigger:"Both spells successfully affect the same target", rules:"Each caster must cast a real D&D 5e spell from their sheet and pay slots, concentration, components and normal action costs. If both affect the same target, GM may roll 1d6 Force damage once. Neither spell DC nor damage stack automatically." },
-  { id:"healing-chorus", title:"Healing Chorus", category:"healing", icon:"fa-heart-pulse", action:"Normal healing Action / spell for both", target:false, opposite:false, reach:30, formula:"1d6", bonusKind:"healing", trigger:"Both participants actually use healing abilities on the same ally", rules:"Participants use normal healing spells/abilities and consume resources independently. Once both contribute, GM can roll 1d6 additional healing for one ally (apply manually; cannot exceed maximum HP)." },
-  { id:"guardian-link", title:"Guardian Link", category:"defense", icon:"fa-shield-halved", action:"Reaction + Reaction", target:false, opposite:false, reach:10, formula:"", bonusKind:"none", trigger:"Both spend reactions before the defended attack resolves", rules:"If within 10 ft of each other, two allies can shield one ally from a single incoming attack, granting +2 AC against that attack only. GM adjudicates; the module does not create a permanent AC effect." },
-  { id:"tactical-feint", title:"Tactical Feint", category:"control", icon:"fa-masks-theater", action:"Action + Reaction", target:true, opposite:false, reach:30, formula:"1d4", bonusKind:"penalty", trigger:"Target fails Wisdom saving throw against initiator's normal feature DC (GM adjudicates)", rules:"One ally feints and the other distracts. If target fails a normal Wisdom save, subtract the GM-rolled 1d4 from its next attack roll before end of next round. Resolve the saving throw from D&D 5e, not a second independent DC system." },
-  { id:"skill-synergy", title:"Skill Synergy", category:"skill", icon:"fa-handshake", action:"Action + Action (or downtime checks)", target:false, opposite:false, reach:30, formula:"1d4", bonusKind:"check", trigger:"Both participants succeed on appropriate D&D 5e skill checks", rules:"Each player rolls a normal skill check through their D&D 5e sheet; the GM chooses relevant checks and DC. On both successes, GM may award a shared 1d4 bonus to one follow-up check." },
-  { id:"evasive-relay", title:"Evasive Relay", category:"movement", icon:"fa-person-running", action:"Reaction + Reaction", target:false, opposite:false, reach:10, formula:"", bonusKind:"none", trigger:"Both are conscious and voluntarily spend reactions", rules:"Both allies within 10 ft can reposition up to 10 ft each as an agreed Bound maneuver. Does not teleport, ignore obstacles or automatically ignore opportunity attacks; GM decides legal paths." },
-  { id:"rallying-call", title:"Rallying Call", category:"support", icon:"fa-flag", action:"Bonus Action + Bonus Action", target:false, opposite:false, reach:30, formula:"1d4", bonusKind:"temp", trigger:"Both spend Bonus Actions to rally the group", rules:"Choose one ally within 30 ft; GM may roll 1d4 temporary HP. Temporary HP do not stack; apply the greater value per standard D&D rules." }
-]);
+/** Bound ledger and geometry rules. Pure, testable, backward-compatible with v0.1.0. */
+import {PRESETS} from './catalog.mjs';
+export {PRESETS} from './catalog.mjs';
+export const MODULE_ID='averis-bound-system';
+export const VERSION=2;
 export const DEFAULT_CONFIG = Object.freeze({usesPerEncounter:2, cooldownRounds:3, preventRepeat:true, requireOpposite:true, allowOutOfCombat:true, requireGMApproval:true});
 export const MAX_HISTORY = 200;
-export const CATEGORIES = ["melee", "ranged", "spell", "healing", "defense", "control", "skill", "movement", "support", "custom"];
+export const CATEGORIES = ["melee", "ranged", "spell", "healing", "defense", "control", "skill", "movement", "support", "utility", "custom"];
 export function safeInt(value, fallback=0) { const n=Number(value); return Number.isInteger(n) && Number.isSafeInteger(n)?n:fallback; }
 export function validFormula(value) { return value === "" || (typeof value === "string" && /^(?:[1-9]\d?d(?:4|6|8|10|12|20|100))(?:\s*[+]\s*\d{1,2})?$/.test(value.trim())); }
 export function normalizeTemplate(raw) {
@@ -30,7 +21,9 @@ export function normalizeTemplate(raw) {
   if (!validFormula(formula)) throw new Error("Bonus dice must be blank or XdY [+ N], e.g. 1d6");
   const reach=safeInt(raw.reach,30);
   if (reach<0||reach>300) throw new Error("Reach must be between 0 and 300 feet");
-  return {id,title,category,icon:"fa-people-arrows-left-right",action:String(raw.action??"Action + Action").slice(0,80),target:!!raw.target,opposite:!!raw.opposite,reach,formula,bonusKind:formula?String(raw.bonusKind??"check"):"none",trigger,rules};
+  const level=safeInt(raw.level,1),requiredBondRank=safeInt(raw.requiredBondRank,1);
+  if(level<1||level>20||requiredBondRank<1||requiredBondRank>4)throw Error("Unlock requirements out of range");
+  return {id,title,category,level,requiredBondRank,tier:Math.max(1,safeInt(raw.tier,1)),icon:"fa-people-arrows-left-right",action:String(raw.action??"Action + Action").slice(0,80),target:!!raw.target,opposite:!!raw.opposite,reach,formula,bonusKind:formula?String(raw.bonusKind??"check"):"none",trigger,rules};
 }
 export function defaultLedger() { return {version:VERSION, revision:0, used:{}, entries:[]}; }
 export function normalizeLedger(input){

@@ -18,36 +18,46 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run syntax and regression tests
+      - name: Validate Foundry scripts and regression tests
         shell: bash
         run: |
           set -euo pipefail
           node --check scripts/main.js
           node --check scripts/rules.mjs
+          node --check scripts/catalog.mjs
+          node --check scripts/progression.mjs
           node --test tests/*.test.mjs
-      - name: Verify Foundry V14 manifest and package archive
+      - name: Validate manifest and assemble zip
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
-          m=json.load(open('module.json'))
+          m=json.load(open('module.json', encoding='utf-8'))
+          v=m['version']
           assert m['id']=='averis-bound-system'
-          assert m['version']=='0.1.0'
           assert m['compatibility']['minimum']=='14'
+          assert m['compatibility']['verified']=='14'
           assert m['relationships']['systems'][0]['id']=='dnd5e'
           assert m['relationships']['systems'][0]['compatibility']['minimum']=='5.3.3'
+          assert m['manifest']=='https://raw.githubusercontent.com/Daikaze/Averis-Skill-Tree./averis-bound-system/module.json'
+          assert m['download']==f'https://github.com/Daikaze/Averis-Skill-Tree./releases/download/bound-v{v}/averis-bound-system-v{v}.zip'
+          assert len(v.split('.'))==3
           PY
-          zip -q -r averis-bound-system-v0.1.0.zip module.json scripts styles assets README.md START_HERE_BG.md
-          unzip -t averis-bound-system-v0.1.0.zip
-      - name: Publish tagged release WITHOUT changing Skill Tree latest release
+          VERSION=$(python3 -c 'import json; print(json.load(open("module.json"))["version"])')
+          echo "BOUND_VERSION=$VERSION" >> "$GITHUB_ENV"
+          zip -q -r "averis-bound-system-v${VERSION}.zip" module.json scripts styles assets README.md START_HERE_BG.md
+          unzip -t "averis-bound-system-v${VERSION}.zip"
+      - name: Publish versioned release without replacing Skill Tree latest
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view bound-v0.1.0 >/dev/null 2>&1; then
-            echo 'Bound release already exists, refusing to overwrite an immutable tag' >&2
+          TAG="bound-v${BOUND_VERSION}"
+          ZIP="averis-bound-system-v${BOUND_VERSION}.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Bound release $TAG already exists; update manifest version to release changes" >&2
             exit 1
           fi
-          gh release create bound-v0.1.0 averis-bound-system-v0.1.0.zip --title 'Averis Bound System v0.1.0' --notes 'Playtest release, Foundry VTT 14 + dnd5e 5.3.3. Nine cooperative actions, GM approval, per-encounter ledger, validated cooldown and encounter usage. Read README before live play.' --latest=false
+          gh release create "$TAG" "$ZIP" --title "Averis Bound System v${BOUND_VERSION}" --notes "Foundry V14 / dnd5e 5.3.3. 60 progressive Bound techniques, two advancement tracks, responsive V14 interface, GM approval, regression-tested. Back up world before upgrade." --latest=false

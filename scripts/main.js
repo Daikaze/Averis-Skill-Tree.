@@ -1,3 +1,5 @@
+import {CATEGORY_META} from "./catalog.mjs";
+import { XP_ON_BOUND, xpForNext, totalXpForLevel, bondRank, normalizeProgress, addXp, awardBound, unlockReason } from "./progression.mjs";
 import {
  MODULE_ID, PRESETS, DEFAULT_CONFIG, normalizeTemplate, normalizeLedger,
  failureReason, commitBound, resolveBonus, oppositeSides, distanceFeet
@@ -60,6 +62,8 @@ function validate(req,{strict=true}={}) {
  const t1=canvas.tokens.get(req.tokenA),t2=canvas.tokens.get(req.tokenB);
  if(!t1||!t2||t1.id===t2.id||t1.actor?.type!=="character"||t2.actor?.type!=="character")throw Error("Select two distinct character tokens on the same scene.");
  if(!checkAlive(t1)||!checkAlive(t2))throw Error("Bound requires both characters to be conscious and alive.");
+ const requester=game.users.get(req.fromUserId);if(!requester)throw Error('Unknown requesting user.');
+ if(!requester.isGM && !t1.actor.testUserPermission(requester,'OWNER'))throw Error('Requesting player does not own the initiating Actor.');
  const template=oneTemplate(req.templateId);
  if(!template)throw Error("Bound variant no longer exists.");
  const combat=activeCombat();
@@ -77,6 +81,10 @@ function validate(req,{strict=true}={}) {
  if(target && template.opposite && cfg().requireOpposite && !oppositeSides(center(t1),center(t2),center(target))) throw Error("Allies must stand on opposite sides of the target (flanking formation).");
  const doc=scopeDoc();if(!doc)throw Error("There is no encounter or scene to track Bound uses.");
  const round=combat?.round??null;
+ const one=normalizeProgress(t1.actor.getFlag(MODULE_ID,'boundProgress')),two=normalizeProgress(t2.actor.getFlag(MODULE_ID,'boundProgress'));
+ const commonPair=Math.min(one.pairs[actorKey(t2)]??0,two.pairs[actorKey(t1)]??0);
+ const progressionFailure=unlockReason(template,one,commonPair)||unlockReason(template,two,commonPair);
+ if(progressionFailure)throw Error(`${template.title} is locked: ${progressionFailure}. Both characters must meet prerequisites.`);
  const reason=failureReason({ledger:ledgerOf(doc),a:actorKey(t1),b:actorKey(t2),round,combat:!!combat,config:cfg()});
  if(reason)throw Error(reason);
  if(strict && !doc.canUserModify(game.user,"update"))throw Error("Active GM cannot modify encounter state.");
@@ -116,8 +124,14 @@ async function createBound(req){
  const latest=validate(req);
  const before=ledgerOf(latest.doc);
  const next=commitBound(before,{id:req.requestId,a:actorKey(latest.t1),b:actorKey(latest.t2),round:latest.round,combat:!!latest.combat,templateId:template.id,targetId:target?.id,gmId:game.user.id,sceneId:scene.id,at:Date.now()});
- // Sole active GM serializes all writes. A single document flag is the source of truth.
+ // The encounter ledger commits first. Follow-up XP updates are individually idempotent.
  await latest.doc.setFlag(MODULE_ID,"ledger",next);
+ for(const [owner,other] of [[latest.t1,latest.t2],[latest.t2,latest.t1]]){
+   try {const grant=awardBound(owner.actor.getFlag(MODULE_ID,'boundProgress'),req.requestId,actorKey(other),game.settings.get(MODULE_ID,'xpPerBound')??XP_ON_BOUND);
+     if(grant.awarded)await owner.actor.setFlag(MODULE_ID,'boundProgress',grant.progress);
+   }catch(error){log(`XP award failed for ${owner.actor.name}; bound ledger was committed`,error);notify(`Bound saved, but XP for ${owner.actor.name} was not credited. GM can correct it manually.`,'error');}
+ }
+
  try{
    await ChatMessage.create({speaker:ChatMessage.getSpeaker({actor:latest.t1.actor,token:latest.t1.document}),content:chatContent({...latest,id:req.requestId,gmName:`Approved by ${game.user.name}`,scope:combat?"Combat":"Scene"}),flags:{[MODULE_ID]:{actionId:req.requestId,templateId:template.id,scopeUuid:latest.doc.uuid}}});
  }catch(err){
@@ -148,42 +162,100 @@ async function resolveById(id,scopeUuid){
  await doc.setFlag(MODULE_ID,"ledger",resolveBonus(current,id));
  await roll.toMessage({speaker:ChatMessage.getSpeaker(),flavor:`Averis Bound — ${esc(variant.title)}: shared ${esc(variant.bonusKind)} bonus (GM applies manually)`});
 }
-async function open({actor=null}={}){
- if(!activeScene())return notify("Open an Averis scene first.");
- const all=getTokens(),mine=all.filter(permissionToPropose);
- if(mine.length===0)return notify("You need an owned character token in this scene (or GM permissions).");
- const selected=selectedTokenOrNull();
- const assigned=actor?mine.find(t=>t.actor?.uuid===actor.uuid):null;
- const first=(assigned??(selected&&mine.includes(selected)?selected:null)??mine[0]);
- const partner=all.find(t=>t.id!==first.id);
- if(!partner)return notify("Place at least two different character tokens in the scene.");
- const target=selectedTargetOrNull();
- const variants=templates();
- const current=scopeDoc();
- const state=ledgerOf(current);
- const count=state.used[actorKey(first)]?.count??0;
- const data=await D().input({
-   window:{title:"Averis Bound System"},ok:{label:"Send Bound request"},rejectClose:false,
-   content:`<div class="averis-bound-form">
-   <div class="averis-bound-info"><strong>⚔ Linked Fate</strong><div class="averis-bound-progress"><span>Encounter uses: ${count}/${cfg().usesPerEncounter}</span><span>Cooldown: ${cfg().cooldownRounds} rounds</span><span>One partner only once / encounter</span></div></div>
-   <label>Initiator<select name="tokenA">${optionsHtml(mine.map(t=>({id:t.id,name:t.name})),first.id)}</select></label>
-   <label>Partner<select name="tokenB">${optionsHtml(all.map(t=>({id:t.id,name:t.name})),partner.id)}</select></label>
-   <label>Bound action<select name="templateId">${optionsHtml(variants.map(v=>({id:v.id,name:`${v.title} — ${v.category}`})))}</select></label>
-   <label>Target (required for attacks/control)<select name="targetId"><option value="">No target</option>${optionsHtml(canvas.tokens.placeables.filter(t=>t.id!==first.id&&t.id!==partner.id).map(t=>({id:t.id,name:t.name})),target?.id??"")}</select></label>
-   <div class="averis-bound-info"><strong>Combined Actions:</strong> Melee, Ranged, Spell, Healing, Defense, Control, Skill Challenges, Movement and Support.<p class="averis-bound-note">All rolls, saving throws, spell slots and action costs remain native D&D 5e. A GM must approve the request and the partners' consent before Bound uses are spent.</p></div>
-   </div>`
- });
- const parsed=normalizedInput(data);if(!parsed)return;
- const tokenA=safeId(parsed.tokenA),tokenB=safeId(parsed.tokenB),targetId=parsed.targetId?safeId(parsed.targetId):"";
- const templateId=String(parsed.templateId??"");
- if(!tokenA||!tokenB||!oneTemplate(templateId))return notify("Choose a valid pair and Bound action.");
- const firstToken=canvas.tokens.get(tokenA);
- if(!permissionToPropose(firstToken))return notify("You do not own the initiating character.");
- const req={type:"proposal",requestId:foundry.utils.randomID(18),fromUserId:game.user.id,sceneId:activeScene().id,tokenA,tokenB,targetId,templateId};
- if(isGMCoordinator())enqueue(()=>createBound(req));
- else if(game.users.activeGM?.active){game.socket.emit(SOCKET,req);notify("Bound request sent to the active GM.","info");}
- else notify("An active GM is required to approve Bound actions.","error");
+/** Adaptive Foundry V14 ApplicationV2 — scroll regions are independent. */
+let boundDashboard=null;
+function progressOf(actor){return normalizeProgress(actor?.getFlag(MODULE_ID,'boundProgress'));}
+function actorLabel(t){return t?.actor?.name??t?.name??'Unknown';}
+function allTokensOption(tokens,selected){return tokens.map(t=>`<option value="${esc(t.id)}" ${selected===t.id?'selected':''}>${esc(t.name)}</option>`).join('');}
+function selectedOwned(actor=null){const mine=getTokens().filter(permissionToPropose);return actor?mine.find(t=>t.actor?.uuid===actor.uuid)??mine[0]:mine.find(t=>t.id===selectedTokenOrNull()?.id)??mine[0];}
+function favoriteIds(){return game.settings.get(MODULE_ID,'favorites')??[];}
+function favorite(tid){return favoriteIds().includes(tid);}
+function badgeForLevel(level, bond){return `<span class="ab-chip">Bound Lv ${esc(level)}</span><span class="ab-chip">Bond Rank ${esc(bond)}</span>`;}
+const GROUP_NAMES={all:'Всички',favorites:'Любими',melee:'Melee',ranged:'Ranged',spell:'Spells',healing:'Healing',defense:'Defense',control:'Control',skill:'Skill Checks',movement:'Movement',support:'Support',utility:'Utility',custom:'Custom'};
+class BoundDashboard extends foundry.applications.api.ApplicationV2 {
+ static DEFAULT_OPTIONS={id:'averis-bound-dashboard',classes:['averis-bound-window'],window:{title:'Averis Bound • Combo Library',icon:'fas fa-link',resizable:true},position:{width:1130,height:760}};
+ constructor(options={}){super(options);this.actorUuid=null;this.actorId=null;this.tokenA='';this.tokenB='';this.targetId='';this.category='all';this.search='';this.selectedId='twin-strike';this.view='library';this.scroll=0;this.lockedOnly=false;}
+ remember(actor=null){if(actor){this.actorUuid=actor.uuid;this.tokenA=selectedOwned(actor)?.id??this.tokenA;}else if(!this.tokenA)this.tokenA=selectedOwned()?.id??'';
+   const tokens=getTokens();if(!tokens.some(t=>t.id===this.tokenB)||this.tokenB===this.tokenA)this.tokenB=tokens.find(t=>t.id!==this.tokenA)?.id??'';
+   if(!this.targetId)this.targetId=selectedTargetOrNull()?.id??'';
+ }
+ async show(actor=null){this.remember(actor);const maxW=Math.max(360,Math.min(1130,window.innerWidth-64));const maxH=Math.max(340,Math.min(780,window.innerHeight-96));
+   if(this.rendered){this.bringToFront();this.render({force:true});}else{await this.render({force:true});this.setPosition({width:maxW,height:maxH});}
+ }
+ async _renderHTML(){const tks=getTokens(),owned=tks.filter(permissionToPropose);if(!owned.some(t=>t.id===this.tokenA))this.tokenA=owned[0]?.id??'';if(this.tokenB===this.tokenA||!tks.some(t=>t.id===this.tokenB))this.tokenB=tks.find(t=>t.id!==this.tokenA)?.id??'';
+ const first=tks.find(t=>t.id===this.tokenA),partner=tks.find(t=>t.id===this.tokenB),target=tks.find(t=>t.id===this.targetId);
+ const p=progressOf(first?.actor),q=progressOf(partner?.actor),pairCount=Math.min(p.pairs?.[actorKey(partner)]??0,q.pairs?.[actorKey(first)]??0),bond=bondRank(pairCount);
+ const need=xpForNext(p.level),next=totalXpForLevel(Math.min(20,p.level+1)),earned=p.xp-totalXpForLevel(p.level),percent=p.level===20?100:Math.min(100,Math.max(0,100*earned/need));
+ const ledger=ledgerOf(scopeDoc()),used=ledger.used[actorKey(first)]?.count??0,remaining=Math.max(0,cfg().usesPerEncounter-used);
+ const selected=oneTemplate(this.selectedId)??templates()[0];const all=templates();
+ const visible=all.filter(t=>this.category==='all'||this.category==='favorites'&&favorite(t.id)||t.category===this.category).filter(t=>!this.lockedOnly||unlockReason(t,p,pairCount));
+ const cards=visible.map(t=>{const reason=unlockReason(t,p,pairCount);const bothReason=reason||unlockReason(t,q,pairCount);const locked=!!bothReason;return `<button type="button" data-a="select" data-id="${esc(t.id)}" class="ab-card ${this.selectedId===t.id?'active':''} ${locked?'locked':''}" data-search="${esc((t.title+' '+t.category+' '+t.rules).toLowerCase())}" aria-pressed="${this.selectedId===t.id}">
+ <div class="ab-card-top"><span class="ab-icon"><i class="fas ${esc(t.icon)}"></i></span><span class="ab-tier">T${esc(t.tier??1)}</span></div>
+ <div class="ab-card-name">${esc(t.title)}</div><div class="ab-card-sub">${esc(GROUP_NAMES[t.category]??t.category)}</div>
+ <div class="ab-card-meta"><span><i class="fas fa-layer-group"></i> Lv ${esc(t.level??1)}</span>${locked?'<span class="ab-locked"><i class="fas fa-lock"></i> Locked</span>':'<span class="ab-ready"><i class="fas fa-unlock"></i> Ready</span>'}</div></button>`;}).join('');
+ const reason=selected?(unlockReason(selected,p,pairCount)||unlockReason(selected,q,pairCount)):'No action selected';const ready=!reason&&first&&partner&&remaining>0;
+ const history=ledger.entries.slice(-12).reverse().map(e=>`<div class="ab-history-row"><div><b>${esc(oneTemplate(e.templateId)?.title??e.templateId)}</b><small>${esc((tks.find(t=>actorKey(t)===e.actorA)?.name??'Hero')+' + '+(tks.find(t=>actorKey(t)===e.actorB)?.name??'Hero'))}</small></div><span>${e.round?'Round '+esc(e.round):'Exploration'}</span></div>`).join('')||'<div class="ab-empty">Все още няма комбинирани действия.</div>';
+ const side=`<div class="ab-panel-head"><span><i class="fas fa-users"></i> ПАРТНЬОРИ</span></div><div class="ab-partners"><label>Инициатор<select data-field="tokenA" ${owned.length===0?'disabled':''}>${allTokensOption(owned,this.tokenA)}</select></label><label>Партньор<select data-field="tokenB">${allTokensOption(tks.filter(t=>t.id!==this.tokenA),this.tokenB)}</select></label><label>Цел<select data-field="targetId"><option value="">Без цел</option>${allTokensOption((canvas?.tokens?.placeables??[]).filter(t=>t.id!==this.tokenA&&t.id!==this.tokenB),this.targetId)}</select></label></div>
+ <div class="ab-divider"></div><div class="ab-panel-head"><span><i class="fas fa-chart-line"></i> ПРОГРЕСИЯ</span></div>
+ <div class="ab-rank"><div><strong>BOUND LEVEL ${p.level}</strong><small>${p.level===20?'MAX LEVEL':`${earned} / ${need} XP`}</small></div><div class="ab-meter"><div style="width:${percent}%"></div></div><span class="ab-xtotal">Total ${p.xp} XP</span></div>
+ <div class="ab-statline">${badgeForLevel(p.level,bond)}</div><p class="ab-hint">Bond Rank расте при успешни действия между същите двама герои. Общите XP растат за всеки участник.</p>
+ <div class="ab-tiles"><div><b>${remaining}</b><small>Bound оставащи</small></div><div><b>${cfg().cooldownRounds}</b><small>Round cooldown</small></div><div><b>${pairCount}</b><small>Общи действия</small></div></div>
+ ${game.user.isGM?'<button class="ab-small-btn" data-a="addxp"><i class="fas fa-plus"></i> Дай Bound XP</button>':''}
+ <div class="ab-divider"></div><div class="ab-panel-head"><span><i class="fas fa-wand-magic-sparkles"></i> ИНСТРУМЕНТИ</span></div>
+ <div class="ab-tools"><button data-a="status"><i class="fas fa-list"></i> Encounter Status</button>${game.user.isGM?'<button data-a="custom"><i class="fas fa-pencil"></i> Custom Combos</button>':''}</div>`;
+ const detail=selected?`<div class="ab-hero-icon"><i class="fas ${esc(selected.icon)}"></i></div><div class="ab-details-name">${esc(selected.title)}</div><div class="ab-details-sub">${esc(GROUP_NAMES[selected.category]??selected.category)} · Tier ${esc(selected.tier??1)}</div>
+ <div class="ab-requirements">${badgeForLevel(selected.level??1,selected.requiredBondRank??1)} ${reason?`<span class="ab-warn"><i class="fas fa-lock"></i> ${esc(reason)}</span>`:'<span class="ab-ok"><i class="fas fa-check"></i> Отключена</span>'}</div>
+ <div class="ab-detail-title">Action Economy</div><p>${esc(selected.action)}</p><div class="ab-detail-title">Trigger</div><p>${esc(selected.trigger)}</p><div class="ab-detail-title">D&D 5e Effect</div><p>${esc(selected.rules)}</p>
+ <div class="ab-detail-grid"><span>Range<strong>${esc(selected.reach)} ft</strong></span><span>Shared Bonus<strong>${esc(selected.formula||'No roll')}</strong></span><span>Target<strong>${selected.target?'Required':'Optional'}</strong></span><span>Formation<strong>${selected.opposite?'Opposite sides':'Flexible'}</strong></span></div>
+ <p class="ab-note">GM разрешава ефекта след нормалните D&D атаки, saving throws, spell slots и действия. Не се прилагат автоматични щети.</p>`:'';
+ const categories=`<div class="ab-categories">${Object.entries(GROUP_NAMES).map(([id,label])=>`<button data-a="category" data-id="${id}" class="${this.category===id?'selected':''}">${esc(label)}${id==='all'?` <em>${all.length}</em>`:''}</button>`).join('')}</div>`;
+ const main=`<div class="ab-main-header"><div><div class="ab-overline">TOME OF PAIRED ARTS</div><h2>Bound Techniques <span>${all.length}</span></h2><p>Кооперативни способности · автоматични отключвания</p></div><div class="ab-main-badges"><span><i class="fas fa-shield-alt"></i> GM approval</span><span><i class="fas fa-dice-d20"></i> D&D 5e</span></div></div>
+ <div class="ab-tab-row"><button data-a="tab" data-id="library" class="${this.view==='library'?'active':''}"><i class="fas fa-layer-group"></i> Библиотека</button><button data-a="tab" data-id="progress" class="${this.view==='progress'?'active':''}"><i class="fas fa-seedling"></i> Progression</button><button data-a="tab" data-id="history" class="${this.view==='history'?'active':''}"><i class="fas fa-scroll"></i> История</button></div>
+ ${this.view==='library'?`<div class="ab-catalog-top"><input type="search" class="ab-search" placeholder="Търси способности, механики…" value="${esc(this.search)}" aria-label="Search combos"><label class="ab-checkbox"><input type="checkbox" data-field="lockedOnly" ${this.lockedOnly?'checked':''}> Само заключени</label></div>${categories}<div class="ab-scroll ab-catalog-scroll"><div class="ab-grid">${cards}</div><div class="ab-empty ab-none" hidden>Няма съвпадения.</div></div>`:this.view==='progress'?`<div class="ab-scroll ab-progress"><h3>Bound progression</h3><p>Героят получава Bound XP след одобрена комбинация (${game.settings.get(MODULE_ID,'xpPerBound')??XP_ON_BOUND} XP), или от GM. Новите умения се отключват автоматично според общото ниво и Bond Rank с партньора.</p><div class="ab-milestones">${[1,3,5,7,9,12,15,20].map(level=>`<div class="${p.level>=level?'done':''}"><strong>Level ${level}</strong><span>${level<=12?'Нови комбинации Tier '+([1,3,5,7,9,12].indexOf(level)+1):'Veteran status'}</span><small>${totalXpForLevel(level)} XP общо</small></div>`).join('')}</div><h3>Bond Rank — ${esc(partner?.name??'Partner')}</h3><p>Rank 1: 0–2 общи действия · Rank 2: 3–5 · Rank 3: 6–9 · Rank 4: 10+</p>${game.user.isGM?'<button class="ab-small-btn" data-a="addxp">GM: Дай XP</button>':''}</div>`:`<div class="ab-scroll ab-history">${history}</div>`}`;
+ const footer=`<div class="ab-footer"><div class="ab-footer-text">${selected?esc(selected.title):'Choose a Bound action'} ${reason?`· ${esc(reason)}`:'· Ready to request'}</div><button type="button" class="ab-action-btn" data-a="submit" ${ready?'':'disabled'}><i class="fas fa-bolt"></i> ${ready?'Изпрати Bound заявка':reason?'Заключена техника':'Няма използвания / партньор'}</button></div>`;
+ const el=document.createElement('section');el.className='ab-shell';el.innerHTML=`<aside class="ab-left ab-scroll">${side}</aside><main class="ab-main">${main}${footer}</main><aside class="ab-right ab-scroll"><div class="ab-detail-header"><span>DETAILS</span>${selected?`<button class="ab-favorite" data-a="favorite" data-id="${esc(selected.id)}" title="Добави/махни от любими"><i class="${favorite(selected.id)?'fas':'far'} fa-star"></i></button>`:''}</div>${detail}</aside>`;
+ return el;
+ }
+ _replaceHTML(rendered,content){content.replaceChildren(rendered);}
+ async _onRender(context,options){await super._onRender(context,options);const root=this.element?.querySelector('.ab-shell');if(!root)return;
+  const list=root.querySelector('.ab-catalog-scroll');if(list)list.scrollTop=this.scroll;
+  for(const select of root.querySelectorAll('[data-field]'))select.addEventListener('change',async()=>{
+    const key=select.dataset.field;if(key==='lockedOnly')this.lockedOnly=select.checked;else this[key]=select.value;
+    if(key==='tokenA'&&this.tokenA===this.tokenB)this.tokenB=getTokens().find(t=>t.id!==this.tokenA)?.id??'';
+    this.scroll=0;await this.render({force:true});
+  });
+  const search=root.querySelector('.ab-search');if(search){const apply=()=>{this.search=search.value;const term=this.search.toLowerCase().trim();let n=0;for(const card of root.querySelectorAll('.ab-card')){const found=card.dataset.search.includes(term);card.hidden=!found;if(found)n++;}const empty=root.querySelector('.ab-none');if(empty)empty.hidden=n!==0;};search.addEventListener('input',apply);apply();}
+  for(const btn of root.querySelectorAll('button[data-a]'))btn.addEventListener('click',async event=>{
+    event.preventDefault();this.scroll=root.querySelector('.ab-catalog-scroll')?.scrollTop??0;
+    try{const action=btn.dataset.a,id=btn.dataset.id;
+      if(action==='select'){this.selectedId=id;await this.render({force:true});}
+      if(action==='category'){this.category=id;this.scroll=0;await this.render({force:true});}
+      if(action==='tab'){this.view=id;this.scroll=0;await this.render({force:true});}
+      if(action==='favorite'){const prev=favoriteIds();await game.settings.set(MODULE_ID,'favorites',favorite(id)?prev.filter(x=>x!==id):[...prev,id]);await this.render({force:true});}
+      if(action==='submit')await this.submit();
+      if(action==='status')await status();
+      if(action==='custom')await customManager();
+      if(action==='addxp')await this.gmXp();
+    }catch(e){cleanError(e);}
+  });
+ }
+ async submit(){const t=canvas?.tokens?.get(this.tokenA),p=canvas?.tokens?.get(this.tokenB),tgt=this.targetId?canvas.tokens.get(this.targetId):null;
+   if(!t||!p||t.id===p.id)throw Error('Choose two distinct character tokens.');if(!permissionToPropose(t))throw Error('You do not own the initiator.');
+   const req={type:'proposal',requestId:foundry.utils.randomID(18),fromUserId:game.user.id,sceneId:activeScene()?.id,tokenA:t.id,tokenB:p.id,targetId:tgt?.id??'',templateId:this.selectedId};
+   if(isGMCoordinator())await enqueue(()=>createBound(req));else if(game.users.activeGM?.active){game.socket.emit(SOCKET,req);notify('Bound request sent to active GM.','info');}else throw Error('An active GM must be connected.');
+   await this.render({force:true});
+ }
+ async gmXp(){if(!game.user.isGM)throw Error('GM only.');const actor=canvas.tokens.get(this.tokenA)?.actor;if(!actor)throw Error('Choose a hero.');
+   const raw=await D().input({window:{title:`Bound XP · ${actor.name}`},content:`<div class="averis-bound-form"><p>Current Level ${progressOf(actor).level}; ${progressOf(actor).xp} XP. Positive or negative XP, up to ±100,000 per operation.</p><label>XP amount<input name="amount" type="number" min="-100000" max="100000" step="1" value="100" required></label></div>`,ok:{label:'Apply XP'},rejectClose:false});
+   const form=normalizedInput(raw);if(!form)return;const amount=Number(form.amount);const next=addXp(progressOf(actor),amount);await actor.setFlag(MODULE_ID,'boundProgress',next);notify(`${actor.name}: Bound Level ${next.level}, XP ${next.xp}`,'info');await this.render({force:true});
+ }
 }
+async function open({actor=null}={}){
+ if(!activeScene())return notify('Open a scene first.');if(getTokens().length<2)return notify('Place two character tokens on the current scene.');
+ if(!getTokens().some(permissionToPropose))return notify('You need an owned character token on this scene.');
+ if(!boundDashboard)boundDashboard=new BoundDashboard();await boundDashboard.show(actor);
+}
+
 function onSocket(message){
  if(!message||typeof message!=="object"||!message.type)return;
  if(message.type==="result"&&message.toUserId===game.user.id){ notify(message.ok?`GM approved ${message.title}.`:`Bound declined: ${message.title}`,message.ok?"info":"warn");return; }
@@ -201,7 +273,7 @@ async function status(){
  if(!isGMCoordinator())return notify("Only the active GM can reset Bound uses.","error");
  const again=await D().confirm({window:{title:"Confirm Bound reset"},content:"Reset all current encounter Bound uses and history? This cannot be undone.",yes:{label:"Reset all Bound uses"},no:{label:"Cancel"},rejectClose:false});
  if(!again)return;
- await doc.setFlag(MODULE_ID,"ledger",{version:1,revision:state.revision+1,used:{},entries:[]});
+ await doc.setFlag(MODULE_ID,"ledger",{version:2,revision:state.revision+1,used:{},entries:[]});
  notify("Bound uses for this encounter were reset.","info");
 }
 async function customManager(){
@@ -218,8 +290,10 @@ async function customManager(){
  const form=normalizedInput(await D().input({window:{title:"Create custom Bound action"},ok:{label:"Save variant"},content:`<div class="averis-bound-form">
  <label>Unique ID (lowercase, hyphens)<input name="id" value="custom-combo" required></label>
  <label>Title<input name="title" value="New Bound Combo" required maxlength="64"></label>
- <label>Category<select name="category">${optionsHtml(["custom","melee","ranged","spell","skill","support","healing","movement","control","defense"].map(v=>({id:v,name:v})))}</select></label>
+ <label>Category<select name="category">${optionsHtml(["custom","utility","melee","ranged","spell","skill","support","healing","movement","control","defense"].map(v=>({id:v,name:v})))}</select></label>
  <label>Action costs<input name="action" value="Action + Action" maxlength="80"></label>
+ <label>Required Bound Level<input name="level" type="number" min="1" max="20" value="3"></label>
+ <label>Required Pair Bond Rank<input name="requiredBondRank" type="number" min="1" max="4" value="1"></label>
  <label>Reach (feet)<input name="reach" type="number" min="0" max="300" value="30"></label>
  <label>Requires target?<select name="target"><option value="false">No</option><option value="true">Yes</option></select></label>
  <label>Requires opposite sides?<select name="opposite"><option value="false">No</option><option value="true">Yes</option></select></label>
@@ -230,7 +304,7 @@ async function customManager(){
  </div>`}));
  if(!form)return;
  try{
-   const entry=normalizeTemplate({...form,target:form.target==="true",opposite:form.opposite==="true"});
+   const entry=normalizeTemplate({...form,target:form.target==="true",opposite:form.opposite==="true",level:Number(form.level||1),requiredBondRank:Number(form.requiredBondRank||1)});
    if(templates().some(x=>x.id===entry.id))throw Error("A Bound variant already has this ID.");
    await game.settings.set(MODULE_ID,"customTemplates",[...custom,entry]);
    notify(`Added custom Bound variant: ${entry.title}`,"info");
@@ -251,15 +325,17 @@ async function onChat(message,html){
  }
 }
 Hooks.once("init",()=>{
+ game.settings.register(MODULE_ID,"xpPerBound",{name:"Automatic XP per approved Bound",hint:"Each participant receives this many Bound XP after GM approval. 0 disables automatic experience.",scope:"world",config:true,type:Number,range:{min:0,max:100,step:5},default:15});
  game.settings.register(MODULE_ID,"usesPerEncounter",{name:"Uses per character / encounter",hint:"Both participants consume one use of their own pool.",scope:"world",config:true,type:Number,range:{min:1,max:10,step:1},default:2});
  game.settings.register(MODULE_ID,"cooldownRounds",{name:"Cooldown in combat rounds",hint:"Three rounds means use on round 1, next use on round 4.",scope:"world",config:true,type:Number,range:{min:0,max:20,step:1},default:3});
  game.settings.register(MODULE_ID,"preventRepeat",{name:"Do not repeat the same partner",scope:"world",config:true,type:Boolean,default:true});
  game.settings.register(MODULE_ID,"requireOpposite",{name:"Opposite-side placement for attack modes",scope:"world",config:true,type:Boolean,default:true});
  game.settings.register(MODULE_ID,"allowOutOfCombat",{name:"Allow scene/downtime Bound actions",scope:"world",config:true,type:Boolean,default:true});
+ game.settings.register(MODULE_ID,"favorites",{name:"Favorite Bound actions",scope:"client",config:false,type:Array,default:[]});
  game.settings.register(MODULE_ID,"customTemplates",{name:"Custom Bound variants",scope:"world",config:false,type:Array,default:[]});
  game.settings.registerMenu(MODULE_ID,"manager",{name:"Create / delete Bound variants",label:"Manage Bound variants",hint:"Create your own combinations using D&D 5e narrative rules and optional bonus dice.",icon:"fas fa-people-arrows-left-right",type:class extends foundry.applications.api.ApplicationV2{render(...args){void customManager();return this;}},restricted:true});
  game.keybindings.register(MODULE_ID,"open",{name:"Open Averis Bound System",hint:"Propose a combination with another character",editable:[{key:"KeyB",modifiers:["ALT"]}],onDown:()=>{void open();return true;},restricted:false});
- game.modules.get(MODULE_ID).api={open,status,customManager,getVariants:()=>templates(),getLedger:()=>ledgerOf(scopeDoc())};
+ game.modules.get(MODULE_ID).api={open,status,customManager,getVariants:()=>templates(),getLedger:()=>ledgerOf(scopeDoc()),getProgress:(actor)=>progressOf(actor),getUnlocks:(actor,partner=null)=>{const a=progressOf(actor),b=partner?progressOf(partner):null;const pair=partner?Math.min(a.pairs?.[partner.uuid]??0,b.pairs?.[actor.uuid]??0):0;return templates().filter(v=>!unlockReason(v,a,pair)&&(!b||!unlockReason(v,b,pair)));}};
 });
 Hooks.once("ready",()=>{
  if(game.system.id!=="dnd5e")notify("Averis Bound System was designed for the D&D 5e system.","error");
