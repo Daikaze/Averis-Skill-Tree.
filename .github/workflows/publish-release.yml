@@ -17,6 +17,17 @@ jobs:
       - name: Checkout module source
         uses: actions/checkout@v4
 
+      - name: Install Node.js for regression tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate source and run regression tests
+        run: |
+          node --check scripts/main.js
+          node --check scripts/data.js
+          node tests/smoke.mjs
+
       - name: Package the Foundry VTT module
         id: package
         shell: bash
