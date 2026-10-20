@@ -1,8 +1,8 @@
 {
   "id": "averis-affinity-manager",
   "title": "Averis Affinity Manager",
-  "description": "GM-controlled Affinity learning and progression for Averis, with 65 canonical abilities, hidden DC UI, teacher requirements, uses and responsive player dashboard.",
-  "version": "0.2.1",
+  "description": "Affinity progression directly inside the D&D 5e character sheet, with GM-only DCs, 65 canonical abilities, secure training and native Activities.",
+  "version": "0.3.0",
   "authors": [
     {
       "name": "Averis Campaign"
@@ -34,5 +34,5 @@
   "socket": true,
   "url": "https://github.com/Daikaze/Averis-Affinity-Manager",
   "manifest": "https://raw.githubusercontent.com/Daikaze/Averis-Affinity-Manager/main/module.json",
-  "download": "https://github.com/Daikaze/Averis-Affinity-Manager/releases/download/affinity-v0.2.1/averis-affinity-manager-v0.2.1.zip"
+  "download": "https://github.com/Daikaze/Averis-Affinity-Manager/releases/download/affinity-v0.3.0/averis-affinity-manager-v0.3.0.zip"
 }
